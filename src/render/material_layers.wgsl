@@ -4,7 +4,8 @@
 // with the index of refraction, anisotropy and iridescence
 // (`MaterialLayers`). `MATERIAL_LAYERS` is false in every shader but the
 // layered build of the built-in one (see `compose_material`): a constant,
-// so the others compile none of the code it guards.
+// so the others run none of the code it guards (Safari still checks it:
+// see `ScreenSteps`).
 const MATERIAL_LAYERS: bool = false;
 
 // Which layers are on (`material.layer_info.x`).
@@ -55,16 +56,56 @@ var<private> layer_texel1: vec4<f32> = vec4<f32>(1.0);
 var<private> layer_uv: vec2<f32>;
 var<private> layer_uv1: vec2<f32>;
 
+// How the mesh's position and texture coordinates change from this pixel to
+// the next across (`*_x`) and down (`*_y`) the screen. `surface_at` takes
+// them and passes them in: nothing in this file uses `dpdx`, `dpdy` or an
+// implicit-derivative `textureSample*`. Browsers check those for uniform
+// control flow, and Safari's WebGPU also rejects them in functions that no
+// fragment shader reaches, such as these in a compute shader or in a
+// material without layers.
+struct ScreenSteps {
+    world_x: vec3<f32>,
+    world_y: vec3<f32>,
+    uv_x: vec2<f32>,
+    uv_y: vec2<f32>,
+    uv1_x: vec2<f32>,
+    uv1_y: vec2<f32>,
+};
+var<private> layer_steps: ScreenSteps;
+
+// The screen steps of `map_uv(uv, uv1, kind)`. The map is affine (a 2 x 3
+// matrix on the coordinates), so a step goes through its linear part.
+fn layer_uv_steps(kind: u32) -> mat2x2<f32> {
+    let origin = map_uv(vec2<f32>(0.0), vec2<f32>(0.0), kind);
+    let x = map_uv(layer_steps.uv_x, layer_steps.uv1_x, kind) - origin;
+    let y = map_uv(layer_steps.uv_y, layer_steps.uv1_y, kind) - origin;
+    return mat2x2<f32>(x, y);
+}
+
+// `t`'s texel at `uv`, whose screen steps are `steps`, with the mip bias of
+// `textureSampleBias(t, material_sampler, uv, texture_mip_bias())`: scaling
+// the steps by 2^bias moves the level of detail by the bias.
+fn layer_sample0(uv: vec2<f32>, steps: mat2x2<f32>) -> vec4<f32> {
+    let scale = exp2(texture_mip_bias());
+    return textureSampleGrad(custom_texture0, material_sampler, uv, steps[0] * scale, steps[1] * scale);
+}
+
+fn layer_sample1(uv: vec2<f32>, steps: mat2x2<f32>) -> vec4<f32> {
+    let scale = exp2(texture_mip_bias());
+    return textureSampleGrad(custom_texture1, material_sampler, uv, steps[0] * scale, steps[1] * scale);
+}
+
 // Map `kind`'s texel, or `otherwise` without one.
 fn layer_map(kind: u32, otherwise: vec4<f32>) -> vec4<f32> {
     let slot = (material.layer_info.y >> (2u * kind)) & 3u;
     if MATERIAL_MULTI_UV {
         let uv = map_uv(layer_uv, layer_uv1, UV_LAYER_START + kind);
+        let steps = layer_uv_steps(UV_LAYER_START + kind);
         if slot == 1u {
-            return textureSampleBias(custom_texture0, material_sampler, uv, texture_mip_bias());
+            return layer_sample0(uv, steps);
         }
         if slot == 2u {
-            return textureSampleBias(custom_texture1, material_sampler, uv, texture_mip_bias());
+            return layer_sample1(uv, steps);
         }
         return otherwise;
     }
@@ -85,12 +126,13 @@ fn layer_max3(v: vec3<f32>) -> f32 {
     return max(v.x, max(v.y, v.z));
 }
 
-// The texture directions at this pixel (Schüler's cotangent frame).
-fn layer_frame(uv: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>) -> mat2x3<f32> {
-    let dp1 = dpdx(world);
-    let dp2 = -dpdy(world);
-    let duv1 = dpdx(uv);
-    let duv2 = -dpdy(uv);
+// The texture directions at this pixel (Schüler's cotangent frame), for
+// texture coordinates with the screen steps `uv_steps`.
+fn layer_frame(uv_steps: mat2x2<f32>, geometric: vec3<f32>) -> mat2x3<f32> {
+    let dp1 = layer_steps.world_x;
+    let dp2 = -layer_steps.world_y;
+    let duv1 = uv_steps[0];
+    let duv2 = -uv_steps[1];
     let dp2perp = cross(dp2, geometric);
     let dp1perp = cross(geometric, dp1);
     let t = dp2perp * duv1.x + dp1perp * duv2.x;
@@ -99,25 +141,28 @@ fn layer_frame(uv: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>) -> mat2x3<
     return mat2x3<f32>(t * inv, b * inv);
 }
 
-// Fills `layers` in uniform control flow (screen derivatives).
-fn fill_layers(s: Surface, uv: vec2<f32>, uv1: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>, transformed_normal: vec3<f32>) {
+// Fills `layers`. `steps` are the screen steps of `uv`, `uv1` and the
+// position (see `ScreenSteps`).
+fn fill_layers(s: Surface, uv: vec2<f32>, uv1: vec2<f32>, steps: ScreenSteps, geometric: vec3<f32>, transformed_normal: vec3<f32>) {
     let info = material.layer_info;
+    layer_steps = steps;
     if MATERIAL_MULTI_UV {
         layer_uv = uv;
         layer_uv1 = uv1;
     } else {
+        let uv_steps = mat2x2<f32>(steps.uv_x, steps.uv_y);
         if (info.z & 1u) != 0u {
-            layer_texel0 = textureSampleBias(custom_texture0, material_sampler, uv, texture_mip_bias());
+            layer_texel0 = layer_sample0(uv, uv_steps);
         }
         if (info.z & 2u) != 0u {
-            layer_texel1 = textureSampleBias(custom_texture1, material_sampler, uv, texture_mip_bias());
+            layer_texel1 = layer_sample1(uv, uv_steps);
         }
     }
-    var anisotropy_uv = uv;
+    var anisotropy_steps = mat2x2<f32>(steps.uv_x, steps.uv_y);
     if MATERIAL_MULTI_UV {
-        anisotropy_uv = select(s.uv, map_uv(uv, uv1, UV_LAYER_START + MAP_ANISOTROPY), has_layer_map(MAP_ANISOTROPY));
+        anisotropy_steps = layer_uv_steps(select(UV_BASE, UV_LAYER_START + MAP_ANISOTROPY, has_layer_map(MAP_ANISOTROPY)));
     }
-    let basis = layer_frame(anisotropy_uv, world, geometric);
+    let basis = layer_frame(anisotropy_steps, geometric);
     let t = basis[0];
     let b = basis[1];
     var l: Layers;
@@ -135,8 +180,7 @@ fn fill_layers(s: Surface, uv: vec2<f32>, uv1: vec2<f32>, world: vec3<f32>, geom
         // glTF: +Y up the image, along -v (see `surface_at`).
         var coat_basis = basis;
         if MATERIAL_MULTI_UV {
-            let coat_uv = map_uv(uv, uv1, UV_LAYER_START + MAP_CLEARCOAT_NORMAL);
-            coat_basis = layer_frame(coat_uv, world, geometric);
+            coat_basis = layer_frame(layer_uv_steps(UV_LAYER_START + MAP_CLEARCOAT_NORMAL), geometric);
         }
         l.clearcoat_normal = normalize(coat_basis[0] * m.x - coat_basis[1] * m.y + geometric * m.z);
     }
