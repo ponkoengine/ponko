@@ -97,8 +97,9 @@ a time, takes hours with FXC.
 
 wgpu takes DXC by itself when `dxcompiler.dll` is on `PATH` or next to the
 test binary (it comes with Microsoft's DirectXShaderCompiler releases);
-`WGPU_DX12_COMPILER=fxc` or `=dxc` picks one. Games compile with FXC
-unless they ship `dxcompiler.dll`, so a test that is slow only with FXC is
+`WGPU_DX12_COMPILER=fxc` forces FXC and `=dxc` requires the DLL.
+[Windows packages](packaging.md#windows-shader-compilation) bundle DXC by
+default. A test that is slow only with FXC is
 worth a look: one shader once took FXC 20 s here (over 8 minutes with a
 release build's optimizations) for a construct DXC compiled at once.
 

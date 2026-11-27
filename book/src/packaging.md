@@ -45,9 +45,9 @@ packaged copy once to check it runs (the [smoke run](#the-smoke-run-of-any-packa
 
 | Platform | Layout | Archive (default) |
 |---|---|---|
-| Windows | a folder: `my_game.exe`, `assets.pack`, the licenses and notices | `.zip` |
+| Windows | a folder: `my_game.exe`, `dxcompiler.dll`, `assets.pack`, the licenses and notices | `.zip` |
 | macOS | `My Game.app` (the program in `Contents/MacOS`, `assets.pack`, licenses and notices in `Contents/Resources`, the icon as `icon.icns`, an `Info.plist`), with the licenses and notices also beside the app | `.dmg` with a link to Applications (made with `hdiutil`, so on a Mac; elsewhere a `.zip`) |
-| Linux | a folder, like Windows' | `.tar.gz` |
+| Linux | a folder: `my_game`, `assets.pack`, the licenses and notices | `.tar.gz` |
 | Web (`--web`) | a folder: `index.html`, `game.js`, `game_bg.wasm`, `assets.pack`, the licenses and notices | none: upload the folder |
 | iOS (`--target ios`, `--target ios-sim`) | `My Game.app`, a flat iOS bundle: the program, `assets.pack`, the icons, an `Info.plist`, the licenses and notices (see [iOS](ios.md)) | `.ipa` for a device, `.zip` for the simulator |
 | Android (`--target android`) | the files of the apk in `apk/`: `AndroidManifest.xml`, the program as `lib/arm64-v8a/libmain.so`, `assets/assets.pack`, the icons, the licenses and notices; the licenses and notices also beside it (see [Android](android.md)) | `.apk`, signed with the debug key (or by the signing hook); `.aab`, the app bundle Google Play takes, with `--format aab` |
@@ -75,6 +75,7 @@ name = "My Game"              # the name players see: the app, the web page's ti
 id = "com.example.my-game"    # a reverse-DNS id you own: the macOS and iOS bundle identifier, the Android package
 icon = "assets/icon.png"      # a square PNG of 16 to 1024 pixels (a power of two; 512 or 1024 looks best)
 orientation = "any"           # phones (iOS, Android): any, landscape or portrait
+windows-dxc = true            # bundle the Direct3D 12 shader compiler on Windows
 assets = ["assets"]           # folders or files, shipped at the same path next to the program
 pack = { exclude = ["**/*.psd"] }  # how files under assets/ go into assets.pack (or pack = false: loose)
 files = [                     # put at the package's top: licenses, a readme for players, notices
@@ -92,6 +93,7 @@ files = [                     # put at the package's top: licenses, a readme for
 | `orientation` | `any`: an iOS or Android app turns every way the device does (iPhones not upside down), within the player's rotation lock |
 | `assets` | `["assets"]` if that folder exists, else nothing; hidden files (`.DS_Store`) are left out |
 | `files` | the `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*` files beside `Cargo.toml`; a path is put at the package's top under its file name, `{ from, to }` at `to`: a file name or a path inside the package such as `docs/README.txt` (`/`-separated, no `..`), made in each place the package has its files (on macOS inside the app's `Resources` and beside the app) |
+| `windows-dxc` | `true`: bundle the [Direct3D 12 shader compiler](#windows-shader-compilation); `false` leaves it out |
 | `pack` | `true`: the files under `assets/` in one `assets.pack`, [cooked](#cooking-assets-ponko-cook); `false` ships them loose; a table sets packing up: `exclude` (patterns of files left out), `textures = true` (images converted to KTX2 per `textures.json`, as `ponko pack --textures`) and `cook = false` (the source files as they are) |
 
 Paths are relative to `Cargo.toml`. An unknown key, an id that isn't reverse
@@ -550,6 +552,40 @@ them the game runs on one thread. On a host that can't send headers at all,
 `--isolation-worker` adds `ponko-isolate.js`, a service worker that adds them
 at the cost of one reload on the first visit (see [Hosts that can't send the
 headers](web-threads.md#hosts-that-cant-send-the-headers)).
+
+### Windows shader compilation
+
+A Windows package includes Microsoft's DirectX Shader Compiler (DXC) v1.9.2609
+as `dxcompiler.dll` beside the executable on x64, ARM64 and x86. Use
+`ponko package` on Windows, `ponko package --target windows` for
+`x86_64-pc-windows-msvc`, or pass a full Windows target triple. On the first
+package, `curl` downloads the [official release ZIP][dxc-release] (32.3 MB)
+to the Cargo target directory under `package-downloads/`. Ponko checks its
+SHA-256 on download and reuse, and adds `LICENSE-LLVM.txt` to
+`THIRD-PARTY-NOTICES.txt`. The x64 DLL adds 22.3 MB before compression.
+
+On Direct3D 12, wgpu loads DXC when it can find `dxcompiler.dll` and falls
+back to FXC, the compiler that comes with Windows. To leave DXC out of the
+package, set `windows-dxc = false` in `[package.metadata.ponko]`. The game
+will use FXC if no DXC DLL is on its search path. To force FXC even when
+the DLL is available, set `WGPU_DX12_COMPILER=fxc` before launch.
+
+Development builds such as `cargo run` and the render tests use FXC by
+default on a machine without a discoverable DXC DLL. To opt in, place
+the matching `dxcompiler.dll` beside the executable. With the DLL available
+there or on `PATH`, set `WGPU_DX12_COMPILER=dxc` to select DXC explicitly.
+The v1.9.2609 compiler has its own validator and works without an adjacent
+`dxil.dll`.
+
+In three paired debug test runs on Windows 11 (Ryzen 5 3600, Radeon RX Vega,
+driver 31.0.12027.9001, wgpu 30), one `Renderer3D::new` took 2.73–2.79 s
+with FXC and 0.94–1.00 s with DXC. With `WGPU_DEBUG=0`, the debug test
+used release compiler flags and took 3.63–4.18 s with FXC and 0.86–0.91 s
+with DXC. These are renderer initialization timings from the stereo render
+test. Packaged release-game startup timing is tracked in [issue #678][dxc-issue].
+
+[dxc-release]: https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609
+[dxc-issue]: https://github.com/ponkoengine/ponko/issues/678
 
 ### Other platforms and limits
 
