@@ -53,6 +53,7 @@ mod effect;
 mod environment_map;
 #[cfg(any(test, feature = "bench-internals"))]
 mod extraction_bench;
+pub(crate) mod readback;
 #[cfg(any(test, feature = "bench-internals"))]
 pub use extraction_bench::{ExtractionBench, ExtractionSample};
 pub(crate) mod gi;
@@ -181,6 +182,7 @@ pub(crate) use post::{MAX_RENDER_SCALE, MIN_RENDER_SCALE};
 #[cfg(feature = "window")]
 pub(crate) use post::{PostUniform, scaled_size};
 pub use quality::GraphicsQuality;
+pub use readback::Readback;
 pub use settings::{RenderPasses, SceneSettings};
 #[cfg(feature = "window")]
 pub(crate) use skin::blend as blend_skin;
@@ -1624,6 +1626,9 @@ pub(crate) struct Assets3D {
     /// The id each GPU buffer slot was last given out as, and the freed
     /// ones the next buffers take.
     pub gpu_buffer_ids: crate::handle::SlotIds,
+    /// Reads of GPU buffers and render targets back to the CPU
+    /// (`Graphics::read_gpu_buffer`).
+    pub(crate) readbacks: readback::Readbacks,
     pub instance_batches: Vec<Option<instances::Batch>>,
     pub instance_batch_revision: u64,
     /// Crowds (`Graphics::create_crowd`), by id; `None` once freed.

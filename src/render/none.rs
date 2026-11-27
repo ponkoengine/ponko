@@ -208,6 +208,25 @@ impl Renderer {
     #[cfg(feature = "3d")]
     pub fn write_gpu_buffer(&mut self, _: u32, _: u32, _: &[glam::Vec4]) {}
     #[cfg(feature = "3d")]
+    pub fn read_gpu_buffer(&mut self, _: u32, _: u32, _: u32, _: u32) {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
+    pub fn read_render_target(&mut self, _: u32, _: u32, _: [u32; 2], _: [u32; 2]) {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
+    pub fn submit_readbacks(&mut self) {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
+    pub fn collect_readbacks(
+        &mut self,
+        _: impl FnMut(u32, Result<&[glam::Vec4], (crate::error::ErrorKind, &'static str)>),
+    ) {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
     pub fn set_gpu_buffer_motion(&mut self, _: u32, _: bool) {}
     #[cfg(feature = "3d")]
     pub fn set_instance_batch(&mut self, _: u32, _: Option<&crate::three::instances::Batch>) {}

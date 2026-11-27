@@ -160,6 +160,9 @@ pub(crate) struct Renderer {
     /// the windowed startup's stack frames (see `game/window.rs`).
     #[cfg(feature = "3d")]
     three: Option<Box<super::gpu3d::Renderer3D>>,
+    /// The game's reads of GPU buffers and render targets back to the CPU.
+    #[cfg(feature = "3d")]
+    readbacks: super::readback::Readbacks,
     /// Samples per pixel of the 3D frame.
     #[cfg(feature = "3d")]
     msaa: u32,
@@ -1217,6 +1220,8 @@ impl Renderer {
             #[cfg(feature = "3d")]
             three: None,
             #[cfg(feature = "3d")]
+            readbacks: Default::default(),
+            #[cfg(feature = "3d")]
             msaa: settings.msaa,
             #[cfg(feature = "3d")]
             msaa_requested: settings.requested_msaa,
@@ -1490,6 +1495,39 @@ impl Renderer {
     pub fn write_gpu_buffer(&mut self, id: u32, offset: u32, data: &[glam::Vec4]) {
         let queue = self.queue.clone();
         self.three().write_gpu_buffer(&queue, id, offset, data);
+    }
+    /// Queues read `read` of `len` elements of GPU buffer `id` from
+    /// `offset`, copied at the end of the frame (`submit_readbacks`).
+    #[cfg(feature = "3d")]
+    pub fn read_gpu_buffer(&mut self, read: u32, id: u32, offset: u32, len: u32) {
+        let buffer = self.three().gpu_buffer(id).cloned();
+        self.readbacks.read_buffer(read, buffer.as_ref(), offset, len);
+    }
+    /// Queues read `read` of the `size` texels at `at` of render target
+    /// `id` (a live one: the engine checked it).
+    #[cfg(feature = "3d")]
+    pub fn read_render_target(&mut self, read: u32, id: u32, at: [u32; 2], size: [u32; 2]) {
+        if let Some(tex) = self.textures.live(id) {
+            self.readbacks.read_texture(read, &tex.texture, at, size);
+        }
+    }
+    /// Copies what this frame's reads asked for and starts mapping it.
+    #[cfg(feature = "3d")]
+    pub fn submit_readbacks(&mut self) {
+        self.readbacks.submit(&self.device, &self.queue);
+    }
+    /// How many readback staging buffers there are (spare and in flight).
+    #[cfg(all(test, feature = "3d"))]
+    pub(crate) fn readback_staging_buffers(&self) -> usize {
+        self.readbacks.staging_buffers()
+    }
+    /// Hands over the reads that finished, without waiting.
+    #[cfg(feature = "3d")]
+    pub fn collect_readbacks(
+        &mut self,
+        done: impl FnMut(u32, Result<&[glam::Vec4], (crate::error::ErrorKind, &'static str)>),
+    ) {
+        self.readbacks.collect(&self.device, done);
     }
     #[cfg(feature = "3d")]
     pub fn set_gpu_buffer_motion(&mut self, id: u32, keep: bool) {
@@ -1798,6 +1836,8 @@ impl Renderer {
         if let Some(lights) = &self.lights2d {
             lights.tally_memory(&mut t);
         }
+        #[cfg(feature = "3d")]
+        self.readbacks.tally_memory(&mut t);
         if let Some(hidden) = &self.hidden_target {
             t.texture(C::FrameTargets, "offscreen frame", hidden);
         }

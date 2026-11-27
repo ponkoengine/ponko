@@ -61,6 +61,8 @@ mod pipeline_stats;
 #[cfg(feature = "window")]
 mod query_sets;
 #[cfg(all(feature = "window", feature = "3d"))]
+mod readback;
+#[cfg(all(feature = "window", feature = "3d"))]
 mod screen;
 #[cfg(feature = "window")]
 mod shader_diagnostics;
@@ -502,6 +504,8 @@ mod oit_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod pass_timing_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod readback_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_sequence_render_test;
@@ -666,10 +670,10 @@ pub use crate::three::{
     GpuBuffer, GraphicsQuality, Icon, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodFadeTime,
     LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES,
     MAX_CROWD_LEVELS, Material, MaterialDesc, Mesh, MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind,
-    ModelMaterial, ModelMaterials, ModelProjection, Post, PostVolume, ReceivesDecals, RenderPasses, RenderTarget,
-    SceneSettings, ScreenEffect, Shader, ShadowFilter, ShadowMesh, ShadowOnly, Sky, SkyShader, SplitToning, Stencil,
-    StencilCompare, StencilFace, StencilOp, StreamedLod, TargetCamera, TargetEffect, TextureMap, TextureTransform,
-    TextureTransformOverrides, Tonemap,
+    ModelMaterial, ModelMaterials, ModelProjection, Post, PostVolume, Readback, ReceivesDecals, RenderPasses,
+    RenderTarget, SceneSettings, ScreenEffect, Shader, ShadowFilter, ShadowMesh, ShadowOnly, Sky, SkyShader,
+    SplitToning, Stencil, StencilCompare, StencilFace, StencilOp, StreamedLod, TargetCamera, TargetEffect, TextureMap,
+    TextureTransform, TextureTransformOverrides, Tonemap,
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{
