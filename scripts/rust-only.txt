@@ -67,6 +67,10 @@ Graphics::load_cameras           3d.md             # same
 LightBakeScene::add_world        3d.md             # C and C++ components can't be enumerated by mesh; add each model with ponko_light_bake_scene_add
 LightBakeScene::add_gltf         3d.md             # same: add the file's meshes with ponko_light_bake_scene_add where they stand
 Graphics::keep_bake_sources      3d.md             # only add_world reads what it keeps
+Graphics::set_texture_mip_limit  3d.md             # C and C++ games ship smaller textures for small GPUs; no call drops mip levels at load
+Graphics::texture_mip_limit      3d.md             # same
+Graphics::video_memory           3d.md             # no call asks the system for the card's size and budget; the report's JSON has the engine's own count
+Graphics::gpu_memory             3d.md             # C and C++ read it from the performance report's JSON ("gpu_memory")
 Unbaked                          3d.md             # only add_world reads it; leave the model out of the C bake scene
 BakeTexture                      3d.md             # not bound yet; a textured model bakes with the texture's average color as its albedo
 bake_lighting_gpu                3d.md             # not bound yet; ponko_bake_lighting bakes the same light on the CPU
