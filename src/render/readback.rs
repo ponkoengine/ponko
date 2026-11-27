@@ -314,7 +314,9 @@ fn decode(bytes: &[u8], layout: Layout, out: &mut Vec<Vec4>) {
             let f = |b: &[u8]| f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
             out.extend(
                 bytes[..len as usize * 16]
-                    .chunks_exact(16)
+                    .as_chunks::<16>()
+                    .0
+                    .iter()
                     .map(|e| Vec4::new(f(&e[0..4]), f(&e[4..8]), f(&e[8..12]), f(&e[12..16]))),
             );
         }
@@ -327,7 +329,9 @@ fn decode(bytes: &[u8], layout: Layout, out: &mut Vec<Vec4>) {
             for y in 0..height as usize {
                 let row = &bytes[y * row_bytes as usize..][..width as usize * 8];
                 out.extend(
-                    row.chunks_exact(8)
+                    row.as_chunks::<8>()
+                        .0
+                        .iter()
                         .map(|t| Vec4::new(h(&t[0..2]), h(&t[2..4]), h(&t[4..6]), h(&t[6..8]))),
                 );
             }

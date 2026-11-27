@@ -8,10 +8,14 @@
 use ponko::prelude::*;
 use ponko::render::Readback;
 
+/// What `readback` gave: nothing yet, the values, or the error's kind.
+type Answer = Option<Result<Vec<Vec4>, ErrorKind>>;
+
 #[derive(Default)]
 struct Seen {
     read: Option<Readback>,
-    answers: Vec<(u64, Option<Result<Vec<Vec4>, ErrorKind>>)>,
+    /// The frame and the answer, each frame.
+    answers: Vec<(u64, Answer)>,
 }
 
 #[test]
