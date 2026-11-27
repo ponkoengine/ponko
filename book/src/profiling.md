@@ -328,7 +328,8 @@ A windowed game's report also says how much GPU memory the engine holds:
 `report.gpu_memory` (`None` in headless runs, which open no GPU). Every
 texture and buffer the renderer keeps is counted once, at the size the
 engine asked for, in one of ten classes: `textures` (images, render targets,
-texture arrays, glyph atlases), `meshes`, `gpu_buffers`, `frame_targets`
+texture arrays, glyph atlases), `meshes` (the mesh arena sizes its buffers to about 1.25 times
+what they hold and shrinks them when most of one is freed), `gpu_buffers`, `frame_targets`
 (scene color and depth, post-processing, ambient occlusion, reflections,
 temporal history), `shadows` (the sun's cascades), `atlases` (the point and
 spot lights' shadow atlas), `skinning`, `probes` (global illumination and
