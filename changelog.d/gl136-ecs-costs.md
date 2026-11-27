@@ -28,8 +28,9 @@
   0.048 ms at 100k, as fast as hecs. This applies to `for_each` in tracked
   worlds and in views too; parallel loops and queries with three or more
   options keep one loop.
-- Release builds on an Apple M4 Max shared with other builds (load 75–185):
-  `origin/dev` against this change, interleaved, 8 rounds (faster in 7 or
+- The numbers above: release builds on an Apple M4 Max shared with other
+  builds (load 75–185), the code before and after these changes interleaved,
+  8 rounds (faster in 7 or
   8 of them on every row above), and instruction counts from one process
   that links both versions. `crates/ponko_bench/ECS.md` ("Costs won back since the
   baselines") and `REQUIRED.md` have the tables; the guide's performance

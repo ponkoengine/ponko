@@ -57,7 +57,7 @@
   is set aside at an earlier apply, its id goes through the buffer's list,
   and the slot is touched once more to claim it). Measured with
   `ponko_bench` in release builds (fastest of 10 runs for `spawn`/`despawn`,
-  of 50 for `commands`; three interleaved runs of base and of this change;
+  of 50 for `commands`; three interleaved runs of the code before and after;
   M4 Max at load average 58–61 from other builds), milliseconds:
 
   | Benchmark | Before | Reserved ids |
