@@ -21,7 +21,9 @@ and pushes it:
     git push origin release-matrix/checks-0.2.0-rc.1
 
 The branch name picks the jobs: `release-matrix/checks-<version>` runs the
-checks, `release-matrix/first-run-<version>` (pushed after `cargo publish`)
+checks, `release-matrix/c-library-<version>` (pushed from the tag) builds the
+Windows on Arm C library archive, which no maintainer machine can,
+`release-matrix/first-run-<version>` (pushed after `cargo publish`)
 runs scripts/first-run.py on each OS against crates.io. Delete the branch
 afterwards and turn Actions off again. Nothing here touches `main`.
 
@@ -29,7 +31,7 @@ What changes from checks.yml: the `local-*` keys are dropped (only
 run-checks.py reads them), the removed local actions
 (`./.github/actions/windows-linker` and `nextest`) become inline steps that do
 the same, and a trigger, a
-concurrency group and the first-run job are added.
+concurrency group, the first-run job and the C library job are added.
 """
 
 import os
@@ -111,6 +113,46 @@ FIRST_RUN = """\
           cp scripts/first-run.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
           python3 first-run.py "$version" --dir "$RUNNER_TEMP/first-run"
+"""
+
+
+C_LIBRARY = """\
+  # At the cut, from the tag: the C library archive for Windows on Arm, built
+  # and smoke-tested on a hosted Windows on Arm runner (scripts/c-library.py;
+  # CONTRIBUTING.md, "The C library archives"). The archive is a workflow
+  # artifact; the maintainer downloads it into dist/ with the other five.
+  c-library-windows-arm64:
+    if: startsWith(github.ref_name, 'release-matrix/c-library-')
+    name: C library (windows-arm64)
+    runs-on: windows-11-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - name: This machine
+        shell: pwsh
+        run: |
+          "PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE"
+          python -c "import platform; print(platform.machine(), platform.python_version())"
+          cmake --version
+          rustc -vV
+      - name: Build the archive
+        shell: bash
+        run: |
+          version="v${GITHUB_REF_NAME#release-matrix/c-library-}"
+          python scripts/c-library.py build --target aarch64-pc-windows-msvc --version "$version"
+      - name: Smoke test (builds examples/cpp against the archive and runs its tests)
+        shell: bash
+        run: |
+          version="v${GITHUB_REF_NAME#release-matrix/c-library-}"
+          python scripts/c-library.py smoke "target/c-library/ponko-$version-windows-arm64.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ponko-c-library-windows-arm64
+          path: target/c-library/ponko-*-windows-arm64.zip
+          if-no-files-found: error
 """
 
 
@@ -214,7 +256,7 @@ def generate(text):
     parts = [HEADER, "env:", *top_level(text, "env"), "", "jobs:"]
     for job in JOBS:
         parts += convert(found[job], job) + [""]
-    return "\n".join(parts) + FIRST_RUN
+    return "\n".join(parts) + FIRST_RUN + "\n" + C_LIBRARY
 
 
 def selftest():
@@ -262,6 +304,8 @@ jobs:
         real = generate(f.read())
     assert "local-" not in real and "./.github/" not in real
     assert real.count("if: startsWith(github.ref_name, 'release-matrix/checks-')") == len(JOBS)
+    assert "runs-on: windows-11-arm" in real and "c-library.py build --target aarch64-pc-windows-msvc" in real
+    assert "c-library.py smoke" in real and "actions/upload-artifact@v7" in real
     print("release-matrix.py selftest: ok")
 
 

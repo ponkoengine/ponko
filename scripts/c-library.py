@@ -7,6 +7,7 @@
                                        [--no-build] [--dry-run]
     python3 scripts/c-library.py sysroot --out DIR PACKAGE.deb...
     python3 scripts/c-library.py smoke ARCHIVE [--link-only] [--cmake-arg ARG]... [--keep]
+                                       [--zig [--glibc 2.28]] [--docker [--image IMAGE]]
     python3 scripts/c-library.py selftest
 
 `build` makes one archive, `ponko-vX.Y.Z-<os>-<arch>.tar.gz` (`.zip` for
@@ -43,6 +44,12 @@ ctest. An Intel macOS archive on an Apple Silicon Mac builds for x86_64 and
 runs under Rosetta. `--link-only` stops after the build: for an archive whose
 programs can't run here (Windows arm64 on an x64 machine builds with
 `-A ARM64`; other cross builds pass a toolchain with `--cmake-arg`).
+`--zig` compiles the programs for a Linux archive's CPU with zig (link only
+on another CPU). `--docker` runs the whole smoke of a Linux archive inside a
+container instead, on a machine that has Docker (Docker Desktop on a Mac
+runs arm64 Linux natively on Apple silicon): the image, Rocky Linux 8 by
+default, has glibc 2.28, the oldest the archives support, so the test also
+proves that floor. It needs the network (to install CMake and a compiler).
 
 Exit codes: 0 done, 1 a step failed, 3 bad arguments. CONTRIBUTING.md
 "Releasing" has the procedure, per machine.
@@ -68,6 +75,9 @@ HEADERS = ("ponko.h", "ponko.hpp")
 LICENSE_FILES = ("LICENSE-MIT", "LICENSE-APACHE", "NOTICE")
 NOTICES = "THIRD-PARTY-NOTICES.txt"
 DEFAULT_GLIBC = "2.28"
+# The container `smoke --docker` runs in: its glibc is the floor of the Linux
+# archives, so a library that needs a newer one fails there.
+DOCKER_IMAGE = "rockylinux:8"
 
 # Target triple -> archive name, in release order.
 TARGETS = {
@@ -377,6 +387,10 @@ def host_os():
 
 def host_arch():
     machine = platform.machine().lower()
+    if host_os() == "windows":
+        # An x64 Python on a Windows on Arm machine says AMD64; the machine's
+        # own CPU is in these variables.
+        machine = (os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get("PROCESSOR_ARCHITECTURE") or machine).lower()
     return {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
 
 
@@ -387,6 +401,10 @@ def smoke_plan(triple, here_os, here_arch, rosetta, link_only):
         if link_only:
             return [], False
         raise Usage(f"a {TARGETS[triple]} archive builds on {os_}; here is {here_os} (cross builds: --link-only with a --cmake-arg toolchain)")
+    if os_ == "windows" and arch == "aarch64":
+        # Visual Studio's default platform follows the CMake process, which
+        # may be an emulated x64 one on Windows on Arm: name the platform.
+        return ["-A", "ARM64"], arch == here_arch and not link_only
     if arch == here_arch:
         return [], not link_only
     if os_ == "macos":
@@ -398,6 +416,38 @@ def smoke_plan(triple, here_os, here_arch, rosetta, link_only):
     if link_only:
         return [], False
     raise Usage(f"{TARGETS[triple]} programs can't run on {here_arch}: --link-only with a --cmake-arg toolchain")
+
+
+# What runs inside the container: the archive is mounted at /archive and the
+# source tree (examples/cpp and the assets) at /src, both read-only. The work
+# folder has a space in its name, like the one the plain smoke makes.
+DOCKER_SCRIPT = r"""set -eu
+# The system gcc 8 has std::filesystem in a separate library: use a newer one.
+dnf install -y -q cmake make gcc-toolset-12-gcc-c++ alsa-lib systemd-libs > /dev/null
+. /opt/rh/gcc-toolset-12/enable
+ldd --version | head -n 1
+c++ --version | head -n 1
+work="/work/ponko c library"
+mkdir -p "$work"
+tar -xzf "/archive/$ARCHIVE" -C "$work"
+dir="$work/${ARCHIVE%.tar.gz}"
+cmake -S /src/examples/cpp -B "$work/build" -DCMAKE_BUILD_TYPE=Release \
+    "-DPONKO_INCLUDE_DIR=$dir/include" "-DPONKO_LIBRARY_DIR=$dir/lib"
+cmake --build "$work/build" --config Release --parallel
+ctest --test-dir "$work/build" -C Release --output-on-failure
+"""
+
+
+def docker_command(archive, triple, image):
+    """The `docker run` command that smoke-tests a Linux archive in a container."""
+    if target_os(triple) != "linux":
+        raise Usage("--docker is for the Linux archives (the container is Linux)")
+    platform_ = "linux/" + ("arm64" if target_arch(triple) == "aarch64" else "amd64")
+    return [
+        "docker", "run", "--rm", "--platform", platform_,
+        "-v", f"{ROOT}:/src:ro", "-v", f"{archive.parent}:/archive:ro",
+        "-e", f"ARCHIVE={archive.name}", image, "sh", "-c", DOCKER_SCRIPT,
+    ]
 
 
 def zig_toolchain(work, triple, glibc):
@@ -428,7 +478,11 @@ def cmd_smoke(args):
     triple = archive_triple(archive)
     rosetta = host_os() == "macos" and subprocess.run(["arch", "-x86_64", "true"], capture_output=True).returncode == 0
     cross = args.zig and (target_os(triple), target_arch(triple)) != (host_os(), host_arch())
-    cmake_args, runs = smoke_plan(triple, host_os(), host_arch(), rosetta, args.link_only or cross)
+    if args.docker:
+        # The programs build and run in the container, whatever this machine is.
+        cmake_args, runs = [], True
+    else:
+        cmake_args, runs = smoke_plan(triple, host_os(), host_arch(), rosetta, args.link_only or cross)
     work = Path(tempfile.mkdtemp(prefix="ponko c library "))
     try:
         if archive.name.endswith(".zip"):
@@ -446,6 +500,12 @@ def cmd_smoke(args):
             name = install_name(folder / "lib" / LIBRARIES["macos"][0])
             if name != INSTALL_NAME:
                 raise Failure(f"{archive.name}: the library's install name is {name}, not {INSTALL_NAME}")
+        if args.docker:
+            if args.zig or args.link_only or args.cmake_arg:
+                raise Usage("--docker runs the whole smoke in a container: not with --zig, --link-only or --cmake-arg")
+            run(docker_command(archive, triple, args.image))
+            print(f"smoke: {archive.name} built and ran examples/cpp in {args.image}")
+            return 0
         if args.zig:
             cmake_args += zig_toolchain(work, triple, args.glibc)
         build = work / "build"
@@ -517,6 +577,9 @@ def selftest(_args):
     expect(smoke_plan("x86_64-apple-darwin", "macos", "aarch64", True, False) == (["-DCMAKE_OSX_ARCHITECTURES=x86_64"], True), "Rosetta runs")
     expect(smoke_plan("x86_64-apple-darwin", "macos", "aarch64", False, False)[1] is False, "no Rosetta: link only")
     expect(smoke_plan("aarch64-pc-windows-msvc", "windows", "x86_64", False, False) == (["-A", "ARM64"], False), "Windows ARM64 links")
+    expect(smoke_plan("aarch64-pc-windows-msvc", "windows", "aarch64", False, False) == (["-A", "ARM64"], True), "Windows on Arm runs")
+    expect(smoke_plan("aarch64-pc-windows-msvc", "windows", "aarch64", False, True) == (["-A", "ARM64"], False), "Windows on Arm, link only")
+    expect(smoke_plan("x86_64-pc-windows-msvc", "windows", "x86_64", False, False) == ([], True), "Windows x64 runs")
     expect(smoke_plan("aarch64-unknown-linux-gnu", "linux", "aarch64", False, False) == ([], True), "native runs")
     for bad in [("aarch64-unknown-linux-gnu", "linux", "x86_64"), ("aarch64-unknown-linux-gnu", "macos", "aarch64")]:
         try:
@@ -525,6 +588,17 @@ def selftest(_args):
         except Usage:
             pass
     expect(smoke_plan("aarch64-unknown-linux-gnu", "macos", "aarch64", False, True) == ([], False), "cross link only")
+    # The container command: right platform, read-only mounts, Linux only.
+    cmd = docker_command(Path("/a/ponko-v0.2.0-linux-arm64.tar.gz"), "aarch64-unknown-linux-gnu", DOCKER_IMAGE)
+    expect(cmd[:5] == ["docker", "run", "--rm", "--platform", "linux/arm64"], "arm64 container")
+    expect(cmd[cmd.index("-v") + 1].endswith(":/src:ro") and "/a:/archive:ro" in cmd, "read-only mounts")
+    expect("ARCHIVE=ponko-v0.2.0-linux-arm64.tar.gz" in cmd and DOCKER_IMAGE in cmd, "archive and image named")
+    expect(docker_command(Path("/a/x.tar.gz"), "x86_64-unknown-linux-gnu", "i")[4] == "linux/amd64", "amd64 container")
+    try:
+        docker_command(Path("/a/x.zip"), "aarch64-pc-windows-msvc", DOCKER_IMAGE)
+        expect(False, "--docker refused for Windows")
+    except Usage:
+        pass
     # A packed archive keeps its folder on top.
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp) / "ponko-v0.0.0-linux-arm64"
@@ -565,6 +639,8 @@ def main():
     m.add_argument("--keep", action="store_true", help="keep the unpacked archive and build")
     m.add_argument("--zig", action="store_true", help="Linux archives: compile with zig cc for the archive's target (implies --link-only off that machine)")
     m.add_argument("--glibc", default=DEFAULT_GLIBC, help=f"with --zig: the glibc to build for (default {DEFAULT_GLIBC})")
+    m.add_argument("--docker", action="store_true", help="Linux archives: build and run the tests inside a container (needs Docker)")
+    m.add_argument("--image", default=DOCKER_IMAGE, help=f"with --docker: the image (default {DOCKER_IMAGE}, glibc 2.28)")
     sub.add_parser("selftest", help="check the script's decisions with made-up inputs")
     args = parser.parse_args()
     try:
