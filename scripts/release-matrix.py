@@ -129,6 +129,12 @@ PINS = {
 }
 
 ARTIFACT_DAYS = 3
+
+# The Rust release the checks use: the one the maintainers' machines ran the
+# release revision's checks with (set it at each cut). A floating `stable`
+# could turn a new compiler lint into an error under -D warnings and fail a
+# whole run. first-run stays on `stable`: it is what a new user installs.
+RUST = "1.100.0"
 SETUP_IF = "steps.setup.outcome == 'success'"
 
 LOCAL_KEY = re.compile(r"^\s+(- )?local-[a-z]+:")
@@ -184,7 +190,8 @@ LINUX_HEAD = """\
     if: ${{ LINUX_IF }}
     name: Linux checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # linux-all is estimated at 80-100 minutes; a timeout loses the whole run.
+    timeout-minutes: 150
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
@@ -210,11 +217,11 @@ LINUX_HEAD = """\
 """
 
 LINUX_TOOLCHAIN = """\
-      - name: Install Rust (stable)
+      - name: Install Rust (the release's checked version)
         id: setup
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: "RUST_VERSION"
 """
 
 LINUX_SKIPS = """\
@@ -246,10 +253,10 @@ C_LIBRARY = """\
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Install Rust (stable, with the ARM64 Windows target)
+      - name: Install Rust (the release's checked version, with the ARM64 Windows target)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: "RUST_VERSION"
           targets: aarch64-pc-windows-msvc
       - name: Build the archive
         run: |
@@ -599,7 +606,8 @@ def generate(text):
     parts += linux_job(found) + [""]
     windows = C_LIBRARY.replace("WINDOWS_IF", marked(WINDOWS_ARM64))
     first_run = FIRST_RUN.replace("FIRST_RUN_IF", marked(FIRST_RUN_MARKER))
-    return pin("\n".join(parts) + "\n" + windows + "\n" + first_run)
+    out = "\n".join(parts) + "\n" + windows + "\n" + first_run
+    return pin(out.replace("RUST_VERSION", RUST))
 
 
 def selected(workflow, branch):
@@ -747,7 +755,8 @@ jobs:
     uses = re.findall(r"uses: (\S+)(.*)$", real, re.M)
     assert uses and all(re.fullmatch(r"[\w-]+/[\w-]+@[0-9a-f]{40}", u) and c.startswith(" # ") for u, c in uses), uses
     assert real.count("persist-credentials: false") == real.count("uses: actions/checkout@") == 3
-    assert real.count("toolchain: stable") == real.count("uses: dtolnay/rust-toolchain@") == 3
+    assert real.count("uses: dtolnay/rust-toolchain@") == 3
+    assert real.count("toolchain: stable") == 1 and real.count(f'toolchain: "{RUST}"') == 2 and "RUST_VERSION" not in real
     try:
         pin("      - uses: someone/else@v1")
         raise AssertionError("an unpinned action passed")
@@ -771,7 +780,7 @@ jobs:
     assert len(set(ALL_MARKERS)) == len(ALL_MARKERS)
     # Each marker selects exactly its steps; nothing runs without one.
     setup = ["Check out the repository", "Free disk space", "Install ALSA and udev headers (audio, gamepads)",
-             "Install Rust (stable)"]
+             "Install Rust (the release's checked version)"]
     always = [f"{j} / {n}" for j, n, gated in LAST if not gated] + [
         "Render tests skipped on this runner (no GPU adapter before linux-package)"]
     steps_of = {job: re.findall(rf'^      - name: "({job} / [^"]*)"', real, re.M) for job in SOURCES}

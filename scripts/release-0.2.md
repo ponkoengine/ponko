@@ -203,7 +203,15 @@ checks that, and that each marker selects exactly its steps).
 The Linux markers share ONE job and one build tree: the job runs when any of
 them is there, and each group of steps only with its own marker (or
 `linux-all`), so `linux-tests+linux-native` builds once. The timeouts are
-120 minutes (`linux`), 60 (`windows-arm64`) and 30 (`first-run`).
+150 minutes (`linux`: above the `linux-all` estimate, since a timeout loses
+the whole run), 60 (`windows-arm64`) and 30 (`first-run`).
+
+**Rust version.** `linux` and `windows-arm64` use the Rust release the
+maintainers' machines checked the release revision with (`RUST` in
+`release-matrix.py`, set at each cut and regenerated), not a floating
+`stable`: with `-D warnings`, a lint added by a newer compiler would fail
+every build step of a run. `first-run` uses `stable`, what a new user
+installs.
 
 **Mark only what changed or what the release needs.** For `rc.1` of a minor
 that is `linux-all` once, plus `windows-arm64` from the tag and `first-run`

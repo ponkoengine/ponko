@@ -51,7 +51,8 @@ jobs:
     if: ${{ contains(github.ref_name, 'linux-tests') || contains(github.ref_name, 'linux-templates') || contains(github.ref_name, 'linux-features') || contains(github.ref_name, 'linux-native') || contains(github.ref_name, 'linux-package') || contains(github.ref_name, 'linux-all') }}
     name: Linux checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # linux-all is estimated at 80-100 minutes; a timeout loses the whole run.
+    timeout-minutes: 150
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       # The parts the branch name marks (release-matrix/<markers>/<version>).
@@ -83,11 +84,11 @@ jobs:
       - name: "Install ALSA and udev headers (audio, gamepads)"
         # And what the steps need (REQUIRES in the script): dbus at-spi2-core.
         run: sudo apt-get update -q && sudo apt-get install -y libasound2-dev libudev-dev dbus at-spi2-core
-      - name: Install Rust (stable)
+      - name: Install Rust (the release's checked version)
         id: setup
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable, 2026-11-27
         with:
-          toolchain: stable
+          toolchain: "1.100.0"
       # Linux also runs doctests. Windows unit tests have their own job;
       # --test '*' selects all integration targets without running unit tests
       # a second time (--tests would include unit tests too). No job passes
@@ -499,10 +500,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust (stable, with the ARM64 Windows target)
+      - name: Install Rust (the release's checked version, with the ARM64 Windows target)
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable, 2026-11-27
         with:
-          toolchain: stable
+          toolchain: "1.100.0"
           targets: aarch64-pc-windows-msvc
       - name: Build the archive
         run: |
