@@ -102,8 +102,10 @@ fn a_fresh_project_packages_for_the_host_with_one_command() {
     );
     let notices = std::fs::read_to_string(inner.join("THIRD-PARTY-NOTICES.txt")).unwrap();
     assert!(
-        notices.contains("  ponko 0.1.0: MIT OR Apache-2.0"),
-        "the engine is in the notices"
+        // The project depends on this workspace's engine, whose version the
+        // tool shares.
+        notices.contains(concat!("  ponko ", env!("CARGO_PKG_VERSION"), ": MIT OR Apache-2.0")),
+        "the engine is in the notices: {notices}"
     );
     assert!(
         !notices.contains("  fresh_game 0.1.0"),
