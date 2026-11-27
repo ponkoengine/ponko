@@ -5,7 +5,7 @@ struct Settings {
     inverse: mat4x4<f32>,
     projection: mat4x4<f32>,
     previous: mat4x4<f32>,
-    temporal: vec4<f32>, // weight, rotation, half resolution, reserved
+    temporal: vec4<f32>, // weight, rotation, half resolution, 1 with temporal accumulation
     camera: vec4<f32>,
     params: vec4<f32>, // radius, intensity (0: no AO), slices, steps
     sun: vec4<f32>,    // xyz: toward the sun; w: contact shadow length (0: none)
@@ -68,6 +68,18 @@ fn distance_slope(p: vec2<i32>) -> f32 {
     let y = min(abs(view_distance(p + vec2<i32>(0, 1)) - w), abs(view_distance(p - vec2<i32>(0, 1)) - w));
     return max(x, y);
 }
+// The normal at pixel `p` (at `center`), facing the camera (`view`),
+// from the less discontinuous neighbour on either side of each axis.
+fn surface_normal(p: vec2<i32>, center: vec3<f32>, view: vec3<f32>) -> vec3<f32> {
+    let left = center - position(p - vec2<i32>(1, 0));
+    let right = position(p + vec2<i32>(1, 0)) - center;
+    let up = center - position(p - vec2<i32>(0, 1));
+    let down = position(p + vec2<i32>(0, 1)) - center;
+    let dx = select(left, right, dot(right, right) < dot(left, left));
+    let dy = select(up, down, dot(down, down) < dot(up, up));
+    let normal = safe_normalize(cross(dx, dy), view);
+    return normal * select(-1.0, 1.0, dot(normal, view) >= 0.0);
+}
 // Steps of the march toward the sun for contact shadows.
 const CONTACT_STEPS: i32 = 12;
 
@@ -98,6 +110,20 @@ fn contact_shadow(p: vec2<i32>, center: vec3<f32>) -> f32 {
     return 0.0;
 }
 
+// A 4x4 ordered (Bayer) pattern of sixteenths, one per traced pixel: with
+// temporal accumulation it offsets each pixel's slice turn so neighbouring
+// pixels sample different turns and the bilateral filter averages them.
+// Turning every pixel in lockstep made the whole frame's estimate depend on
+// the turn: on grazing ground far away, the open field read darker on some
+// of the 8 turns and the occlusion pulsed every 8 frames.
+fn interleave(p: vec2<i32>) -> f32 {
+    let a = p & vec2<i32>(1);
+    let b = (p >> vec2<u32>(1u)) & vec2<i32>(1);
+    let coarse = 2 * (b.x ^ b.y) + b.y;
+    let fine = 2 * (a.x ^ a.y) + a.y;
+    return f32(4 * fine + coarse) / 16.0;
+}
+
 @fragment fn fs_ao(in: Full) -> @location(0) vec4<f32> {
     let p = coordinate(vec2<i32>(in.at.xy * select(1.0, 2.0, settings.temporal.z > 0.0)));
     if is_sky(z_at(p)) { return vec4<f32>(0.0); }
@@ -110,22 +136,20 @@ fn contact_shadow(p: vec2<i32>, center: vec3<f32>) -> f32 {
         return vec4<f32>(0.0, contact, 0.0, 1.0);
     }
     let view = normalize(settings.camera.xyz - center);
-    // Use the less discontinuous neighbor on either side of each axis.
-    let left = center - position(p - vec2<i32>(1, 0));
-    let right = position(p + vec2<i32>(1, 0)) - center;
-    let up = center - position(p - vec2<i32>(0, 1));
-    let down = position(p + vec2<i32>(0, 1)) - center;
-    let dx = select(left, right, dot(right, right) < dot(left, left));
-    let dy = select(up, down, dot(down, down) < dot(up, up));
-    var normal = safe_normalize(cross(dx, dy), view);
-    normal *= select(-1.0, 1.0, dot(normal, view) >= 0.0);
+    let normal = surface_normal(p, center, view);
     let radius = settings.params.x;
     // Projection of a world-space radius at this pixel (perspective).
     let clip = settings.projection * vec4<f32>(center, 1.0);
     let pixel_radius = clamp(radius * length(vec3<f32>(settings.projection[0].y, settings.projection[1].y, settings.projection[2].y)) * f32(textureDimensions(depth).y) / max(abs(clip.w), 0.01) * 0.5, 1.0, 256.0);
     var visibility = 0.0;
+    // The slices' visibility if nothing occluded them: the estimate is the
+    // ratio of the two, so open ground reads as open whichever way a few
+    // slices point (dividing by the slice count read grazing ground as
+    // occluded on some turns and not on others).
+    var open = 0.0;
+    let turn = fract(settings.temporal.y + select(0.0, interleave(vec2<i32>(in.at.xy)), settings.temporal.w > 0.0));
     for (var slice = 0u; slice < u32(settings.params.z); slice++) {
-        let phi = (f32(slice) + 0.5 + settings.temporal.y) * 3.14159265 / settings.params.z;
+        let phi = (f32(slice) + 0.5 + turn) * 3.14159265 / settings.params.z;
         let direction = vec2<f32>(cos(phi), sin(phi));
         let neighbor = position(p + vec2<i32>(round(direction * 2.0)));
         let fallback = safe_normalize(cross(view, vec3<f32>(0.0, 1.0, 0.0)), vec3<f32>(1.0, 0.0, 0.0));
@@ -158,8 +182,9 @@ fn contact_shadow(p: vec2<i32>, center: vec3<f32>) -> f32 {
         let h1 = angle_n + clamp(-acos(clamp(horizons.x, -1.0, 1.0)) - angle_n, -1.5707963, 1.5707963);
         let h2 = angle_n + clamp(acos(clamp(horizons.y, -1.0, 1.0)) - angle_n, -1.5707963, 1.5707963);
         visibility += projected_length * 0.25 * (2.0 * cos_n + 2.0 * (h1 + h2) * sin(angle_n) - cos(2.0 * h1 - angle_n) - cos(2.0 * h2 - angle_n));
+        open += projected_length * (cos_n + angle_n * sin(angle_n));
     }
-    let ao = pow(clamp(visibility / settings.params.z, 0.0, 1.0), settings.params.y);
+    let ao = pow(clamp(visibility / max(open, 0.0001), 0.0, 1.0), settings.params.y);
     return vec4<f32>(1.0 - ao, contact, 0.0, 1.0);
 }
 // Blue 1 marks screen-space reflections in the target's second level, alpha
@@ -169,6 +194,7 @@ fn resolve_ao(in: Full) -> Resolved {
     let p = vec2<i32>(in.at.xy);
     if is_sky(z_at(p)) { return Resolved(vec4<f32>(0.0, 0.0, 1.0, 0.0), vec4<f32>(0.0)); }
     let center = position(p);
+    let normal = surface_normal(p, center, normalize(settings.camera.xyz - center));
     var sum = vec2<f32>(0.0);
     var total = 0.0;
     let scale = select(1, 2, settings.temporal.z > 0.0);
@@ -180,8 +206,12 @@ fn resolve_ao(in: Full) -> Resolved {
             let q = clamp(base + vec2<i32>(x, y), vec2<i32>(0), vec2<i32>(textureDimensions(image))-1);
             let at = coordinate(q * scale + vec2<i32>(scale / 2));
             if is_sky(z_at(at)) { continue; }
-            let delta = position(at) - center;
-            let w = exp(-dot(vec2<f32>(at-p) / f32(scale), vec2<f32>(at-p) / f32(scale)) * 0.25) * exp(-dot(delta, delta) / max(settings.params.x * settings.params.x * 0.01, 0.000001));
+            // Neighbours count by their distance off this pixel's plane, not
+            // along it: on ground seen at a grazing angle far away, the next
+            // pixel up is metres along the ground, and weighting by that
+            // distance left the far field unfiltered.
+            let off_plane = dot(position(at) - center, normal);
+            let w = exp(-dot(vec2<f32>(at-p) / f32(scale), vec2<f32>(at-p) / f32(scale)) * 0.25) * exp(-off_plane * off_plane / max(settings.params.x * settings.params.x * 0.01, 0.000001));
             sum += textureLoad(image, q, 0).rg * w;
             total += w;
         }

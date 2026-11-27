@@ -128,6 +128,38 @@ fn ao_and_contact_shadows_hold_still_at_100_to_400_m_with_a_near_plane_of_a_cent
 }
 
 #[test]
+fn temporal_ao_turns_its_slices_without_pulsing_the_far_field() {
+    // The same field with only the occlusion's history (no temporal
+    // antialiasing, whose jitter moves pixels on its own): what changes
+    // from frame to frame is the turn of the slices alone. Every turn has
+    // to read the same: with all pixels turning in lockstep and the
+    // estimate divided by the slice count, the open ground 300 to 400 m
+    // away read darker on some of the 8 turns and the field pulsed every 8
+    // frames (mean up to 0.77 per frame on an Apple M4 Max; without
+    // rotation it is exactly still).
+    let Some(mut stage) = stage(0.01) else { return };
+    stage.ctx.scene3d.post.ao_temporal = true;
+    let rows = field_rows(&stage);
+    let settled = crop(&stage.settled(48), rows.clone());
+    let still = Tolerance {
+        channel: 4,
+        outliers: 0.002,
+        edge: 0,
+    };
+    for k in 0..16 {
+        let frame = crop(&stage.image(), rows.clone());
+        let d = diff(&settled, &frame, still.channel);
+        assert!(d.within(still), "frame {} after settling differs: {d}", k + 1);
+        assert!(
+            d.mean < 0.2,
+            "frame {} after settling: the occlusion pulses with its turn ({d})",
+            k + 1
+        );
+    }
+    stage.finish();
+}
+
+#[test]
 fn a_near_plane_of_a_centimetre_draws_the_world_beyond_it_as_one_of_ten() {
     let images = [0.1, 0.01].map(|near| {
         let mut stage = stage(near)?;

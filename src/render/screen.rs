@@ -196,7 +196,7 @@ impl Ao {
                     if temporal && valid { 0.85 } else { 0.0 },
                     if temporal { (self.frame % 8) as f32 / 8.0 } else { 0.0 },
                     self.half as u32 as f32,
-                    0.0,
+                    temporal as u32 as f32,
                 ],
                 camera: camera.extend(1.0).to_array(),
                 params: [
