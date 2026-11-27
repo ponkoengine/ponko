@@ -49,8 +49,10 @@ ponko textures           # GPU-compressed .ktx2 textures from your images (see D
 ponko cook               # runtime-ready assets under the same names (package does it for you)
 ```
 
-`ponko_cli` is new in 0.2; until that release, install it from the
-repository: `cargo install ponko_cli --git https://github.com/ponkoengine/ponko`.
+`ponko_cli` is new in 0.2. Until 0.2.0 is out, Cargo installs its release
+candidate only when asked for by version: `cargo install ponko_cli --version
+0.2.0-rc.1` (or the newest from the repository: `cargo install ponko_cli --git
+https://github.com/ponkoengine/ponko`).
 [The `ponko` command](cli.md) lists every command and option.
 
 | Template | Engine features | What's in it |

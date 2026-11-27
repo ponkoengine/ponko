@@ -114,9 +114,11 @@ the library yourself, make the same check at startup:
 
 Within a version, existing functions and struct layouts never change and new
 releases only add functions and enum values, except for the
-[unstable functions](#unstable-functions). The version stays 2 for 0.1.0: the
-old C spellings were removed before any native artifact was released,
-and every `ponko_*` function, layout and numeric value is unchanged.
+[unstable functions](#unstable-functions). The version is 2 in 0.1.0 and
+stays 2 in 0.2: the old C spellings were removed before any native artifact
+was released, and 0.2 adds functions, descriptors and enum values without
+changing an existing layout or numeric value (the few calls whose behaviour
+changed are in the migration guide's C and C++ entries).
 
 ## A C++ game
 

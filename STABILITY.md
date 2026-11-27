@@ -11,8 +11,8 @@ Ponko was formerly Crabby Engine. 0.1.0 removed every old name; the
 
 The crates follow [semver as Cargo applies it to 0.x](https://doc.rust-lang.org/cargo/reference/semver.html):
 
-- **Patch releases (0.1.x)** are compatible with each other: bug fixes and
-  additions only. `ponko = "0.1"` in Cargo.toml picks up the newest one, and
+- **Patch releases (0.2.x)** are compatible with each other: bug fixes and
+  additions only. `ponko = "0.2"` in Cargo.toml picks up the newest one, and
   your code keeps compiling and behaving as documented.
 - **Minor releases (0.2.0, 0.3.0, ...)** may break things: rename, move or
   remove items, change signatures, behavior or defaults. Every break is
@@ -141,7 +141,7 @@ compiling in its patch releases. So do what a plugin adds through:
 
 | Release | When | Contains |
 |---|---|---|
-| Patch (0.1.1, 0.1.2, ...) | As needed: within days for a regression or a security fix, otherwise when there are fixes to ship | Bug fixes and additions. Nothing that breaks code written for the same minor. |
+| Patch (0.2.1, 0.2.2, ...) | As needed: within days for a regression or a security fix, otherwise when there are fixes to ship | Bug fixes and additions. Nothing that breaks code written for the same minor. |
 | Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks. 0.2.0 is the exception: it is a larger release and has no fixed interval | New features and breaking changes, each break with its migration entry. |
 | 1.0 | When the readiness checklist (#480) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
 
@@ -163,7 +163,7 @@ compiling in its patch releases. So do what a plugin adds through:
 - **Support.** The newest minor gets patch releases. The minor before it
   gets fixes for security problems, crashes and data loss for four weeks
   after a new minor, so there is time to migrate. Older ones get none.
-- **Patch releases come from a release branch** (`release-0.1`, ...), so
+- **Patch releases come from a release branch** (`release-0.2`, ...), so
   `main` can take breaking changes for the next minor right after a
   release. Fixes land on `main` first and are carried over (the `backport`
   label marks them; CONTRIBUTING.md, "Releasing", has the procedure).

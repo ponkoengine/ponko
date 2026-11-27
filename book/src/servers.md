@@ -118,7 +118,7 @@ The server writes one JSON object per line to standard output, which
 `docker logs`, Kubernetes and log collectors read as they are:
 
 ```json
-{"ts":"2026-11-14T19:05:00.476Z","level":"info","event":"server_start","control":null,"engine":"0.1.0","hz":30,"listen":"0.0.0.0:7777","name":"my_server","pid":1,"shutdown_grace_s":3.0,"signals":true}
+{"ts":"2026-11-14T19:05:00.476Z","level":"info","event":"server_start","control":null,"engine":"0.2.0","hz":30,"listen":"0.0.0.0:7777","name":"my_server","pid":1,"shutdown_grace_s":3.0,"signals":true}
 {"ts":"2026-11-14T19:05:10.481Z","level":"info","event":"tick_report","entities":4,"hz":30.09,"late_ticks":0,"peak_rss_bytes":3702784,"peers":4,"rss_bytes":null,"skipped_ticks":0,"target_hz":30,"tick_ms_max":2.13,"tick_ms_mean":0.024,"tick_ms_p99":0.091,"ticks":301,"window_s":10.004}
 {"ts":"2026-11-14T19:05:21.843Z","level":"info","event":"server_stopping","grace_s":3.0,"reason":"terminate","tick":642}
 {"ts":"2026-11-14T19:05:21.912Z","level":"info","event":"server_stopped","reason":"terminate","ticks":644,"uptime_s":21.4}

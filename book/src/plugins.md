@@ -159,8 +159,8 @@ a version table, and an `AGENTS.md`. It depends on the engine with
 
 - **Follow semver.** Before 1.0, a breaking change to your API is a new
   minor version (0.1 to 0.2); after 1.0, a new major one.
-- **Depend on a Ponko minor**, `ponko = { version = "0.1", default-features
-  = false }`, never an exact patch (`=0.1.3`) or `*`. Ponko's patch
+- **Depend on a Ponko minor**, `ponko = { version = "0.2", default-features
+  = false }`, never an exact patch (`=0.2.3`) or `*`. Ponko's patch
   releases don't break code (see [STABILITY.md](../../STABILITY.md)),
   so the range takes the game's newest.
 - **A new Ponko minor is a breaking release of your crate.** Your API

@@ -25,9 +25,11 @@ code before and after.
   returning the entity at once.
 - **Rendering**: 2D lights and particles, sprite flips and blend modes,
   [several cameras in one window](viewports.md), camera rigs, a sky kit with
-  clouds, a [water kit](water.md), baked and probe lighting, temporal
-  upscaling, auto exposure, [HDR output](hdr.md), reverse-Z depth and GPU
-  timing and memory in the performance report.
+  clouds, a [water kit](water.md), baked and probe lighting, lighting from
+  HDR panoramas, material layers (clear coat, sheen, transmission and more,
+  read from glTF), temporal upscaling, auto exposure,
+  [HDR output](hdr.md), reverse-Z depth and GPU timing and memory in the
+  performance report.
 - **Animation and crowds**: [2D skeletons](skeleton2d.md), humanoid
   retargeting, and [crowds](crowds.md) of thousands of animated characters
   in a few draws.
@@ -45,15 +47,17 @@ code before and after.
   [dedicated servers](servers.md), a reference [lobby server](lobby.md)
   with relay, [WebRTC](webrtc.md), Steam Networking Sockets and
   [Steam services](steam.md).
-- **Platforms**: [iOS](ios.md), [threads on the web](web-threads.md),
+- **Platforms**: [iOS](ios.md), [Android](android.md),
+  [threads on the web](web-threads.md),
   WebGPU first in the browser, [video](video.md), C and C++ games built
   for the web, and C library downloads for Intel Macs, Arm Linux and Arm
   Windows.
 - **Shipping and support**: `ponko new` and `ponko package`
   ([packaging](packaging.md)), [crash reports](crash-reports.md) with
   native backtraces, [mods](mods.md), [debug drawing](debug-draw.md), a
-  developer console, and error messages that name the fix
-  ([errors](errors.md)).
+  developer console, error messages that name the fix
+  ([errors](errors.md)), and loaders and network hosts hardened against
+  hostile files and packets ([security](security.md)).
 - **Learning it**: two tutorials ([2D](tutorial-2d.md), [3D](tutorial-3d.md)),
   a [cookbook](cookbook/index.md) of fifty recipes,
   [Coming from Bevy](from-bevy.md), [maturity levels](maturity.md) on every
