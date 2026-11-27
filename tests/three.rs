@@ -2133,6 +2133,78 @@ fn gpu_buffers_support_headless_setup_and_writes() {
         assert_eq!(ctx.scene3d.passes.compute[0].buffer, Some(b));
     });
 }
+// ANCHOR: readback
+/// Burning cells per region: each texel of a 4 x 4 target adds up the
+/// 16 x 16 block of the 64 x 64 fire grid under it (red is 1 where a cell
+/// burns). The grid is the material's texture.
+const COUNT_FIRE: &str = "
+fn compute(c: Cell) -> vec4<f32> {
+    var burning = 0.0;
+    for (var y = 0; y < 16; y++) {
+        for (var x = 0; x < 16; x++) {
+            burning += textureLoad(base_texture, c.pixel * 16 + vec2<i32>(x, y), 0).x;
+        }
+    }
+    return vec4<f32>(burning, 0.0, 0.0, 0.0);
+}";
+
+struct FireReport {
+    regions: RenderTarget,
+    pending: Option<ponko::render::Readback>,
+    /// Burning cells in each region, a few frames old.
+    burning: [f32; 16],
+}
+
+/// Setup: after the fire's own compute pass, every frame.
+fn count_fire(ctx: &mut Ctx, fire: RenderTarget) {
+    let regions = ctx.gfx.create_render_target(4, 4);
+    let count = ctx.gfx.create_compute("count fire", COUNT_FIRE);
+    let grid = ctx
+        .gfx
+        .create_material(MaterialDesc::default().with_texture(fire.texture()));
+    ctx.scene3d
+        .passes
+        .compute
+        .push(ComputePass::new(count, regions).with_material(grid));
+    ctx.world.insert_resource(FireReport {
+        regions,
+        pending: None,
+        burning: [0.0; 16],
+    });
+}
+
+/// A frame system: one read in flight, asked again once it is answered.
+fn read_fire(ctx: &mut Ctx) {
+    let report = ctx.world.resource_mut::<FireReport>();
+    let regions = report.regions;
+    let pending = *report
+        .pending
+        .get_or_insert_with(|| ctx.gfx.read_render_target(regions, uvec2(0, 0), uvec2(4, 4)));
+    let Some(answer) = ctx.gfx.readback(pending) else {
+        return; // still on the GPU: keep the last numbers
+    };
+    if let Ok(texels) = answer {
+        for (burning, texel) in report.burning.iter_mut().zip(texels) {
+            *burning = texel.x;
+        }
+    }
+    report.pending = None;
+}
+// ANCHOR_END: readback
+#[test]
+fn fire_counts_are_asked_for_each_frame_and_headless_keeps_the_last() {
+    let world = Game::new("fire", 1, 1)
+        .headless_frames(true)
+        .setup(|ctx| {
+            let fire = ctx.gfx.create_render_target(64, 64);
+            count_fire(ctx, fire);
+        })
+        .system(read_fire)
+        .run_headless(4);
+    let report = world.resource::<FireReport>();
+    // Headless runs no compute passes: every read fails and is asked again.
+    assert_eq!(report.burning, [0.0; 16]);
+}
 #[test]
 fn freed_gpu_buffers_reuse_slots_under_new_ids_and_drop_their_passes() {
     Game::new("buffers", 1, 1).run_headless(0, |ctx| {

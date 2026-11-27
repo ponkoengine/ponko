@@ -156,3 +156,49 @@ fn with_webgl2_limits_a_buffer_read_fails_and_a_target_read_works() {
     let (texels, _) = wait(&mut ctx, texels);
     assert_eq!(texels.unwrap(), [Vec4::ZERO; 4]);
 }
+
+#[test]
+fn a_grid_reduced_on_the_gpu_reads_back_as_a_few_counts() {
+    let Some(gpu) = gpu() else { return };
+    if !needs(&gpu.device, GpuFeature::Compute) {
+        return;
+    }
+    let mut ctx = game_on(gpu);
+    // The guide's pattern ("Reading compute results on the CPU"): a 64 x 64
+    // fire grid, burning where x < 20, adds up into 4 x 4 regions.
+    let fire = ctx.gfx.create_render_target(64, 64);
+    let burn = ctx.gfx.create_compute(
+        "burn",
+        "fn compute(c: Cell) -> vec4<f32> { return vec4<f32>(select(0.0, 1.0, c.pixel.x < 20), 0.0, 0.0, 1.0); }",
+    );
+    let regions = ctx.gfx.create_render_target(4, 4);
+    let count = ctx.gfx.create_compute(
+        "count fire",
+        "fn compute(c: Cell) -> vec4<f32> {
+            var burning = 0.0;
+            for (var y = 0; y < 16; y++) {
+                for (var x = 0; x < 16; x++) {
+                    burning += textureLoad(base_texture, c.pixel * 16 + vec2<i32>(x, y), 0).x;
+                }
+            }
+            return vec4<f32>(burning, 0.0, 0.0, 0.0);
+        }",
+    );
+    let grid = ctx
+        .gfx
+        .create_material(crate::render::MaterialDesc::default().with_texture(fire.texture()));
+    ctx.scene3d.passes.compute.push(ComputePass::new(burn, fire));
+    ctx.scene3d
+        .passes
+        .compute
+        .push(ComputePass::new(count, regions).with_material(grid));
+    let read = ctx.gfx.read_render_target(regions, uvec2(0, 0), uvec2(4, 4));
+    let (counts, frames) = wait(&mut ctx, read);
+    let counts: Vec<f32> = counts.expect("the read arrives").iter().map(|t| t.x).collect();
+    eprintln!("burning per region, {frames} frame(s) later: {counts:?}");
+    // Columns 0..16 burn whole (256 cells), 16..20 a quarter (64); the
+    // regions right of the fire (the negative control) count none.
+    for row in counts.chunks(4) {
+        assert_eq!(row, [256.0, 64.0, 0.0, 0.0], "{counts:?}");
+    }
+}

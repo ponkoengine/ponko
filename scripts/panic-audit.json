@@ -2075,12 +2075,6 @@
     "reason": "Internal invariant: fn write(&mut self, range: Range<u32>, data: impl IntoIterator<Item = T>) {         let offset = self.staged.len();         self.staged.extend(data);         debug_assert_eq!(self.staged.len() - offset, (range.end - range.start) as usize);",
     "site": "src/render/gpu3d/mesh_arena.rs:78"
   },
-  "src/render/gpu3d/mesh_arena.rs:a85f8d51e22fd655": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: }             self.buffer = Some(buffer);         }         let buffer = self.buffer.as_ref().unwrap();",
-    "site": "src/render/gpu3d/mesh_arena.rs:137"
-  },
   "src/render/gpu3d/passes.rs:17994cc691891d2e": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -2326,6 +2320,12 @@
     "construction": "assert!(!stats || frames.len() == 1, \"counters sum over a batch\")",
     "reason": "Internal renderer/storage consistency check: /// times the batch.     fn run(&mut self, path: Path, frames: &[u32], stats: bool) -> FrameTime {         assert!(!frames.is_empty() && frames.len() <= BATCH_MAX as usize);         assert!(!stats || frames.len() == 1, \"counters sum over a batch\");",
     "site": "src/render/mesh_shader_proto.rs:1321"
+  },
+  "src/render/readback.rs:1a5720379580a2c5": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(texture.format(), wgpu::TextureFormat::Rgba16Float)",
+    "reason": "Render targets are always made in HDR_FORMAT (Rgba16Float) by Renderer::create_render_target; reads only reach live render targets.",
+    "site": "src/render/readback.rs:128"
   },
   "src/render/shader_diagnostics.rs:3f4672cf52ee9737": {
     "classification": "invariant",
@@ -3382,6 +3382,30 @@
     "construction": "debug_assert!(rank < count)",
     "reason": "Internal invariant: let count = self.candidates.len();         for (rank, c) in self.candidates.iter().enumerate().rev() {             let id = (first_row + rank) as u32;             debug_assert!(rank < count);",
     "site": "src/three/projected.rs:290"
+  },
+  "src/three/readback.rs:24912f26e6aa39e5": {
+    "classification": "caller-contract",
+    "construction": "assert!( size.x > 0 && size.y > 0 && at.x.checked_add(size.x).is_some_and(|x| x <= width) && at.y.checked_add(size.y).is_some_and(|y| y <= height), \"ponko: read_render_target rectangle must be at least 1 x 1 and fit in the {width} x {height} target; got {size} at {at}\" )",
+    "reason": "read_render_target with an empty rectangle or one past the edge: the message names the target size and the rectangle; should_panic test in tests/readback.rs.",
+    "site": "src/three/readback.rs:234"
+  },
+  "src/three/readback.rs:8252acd1427048ec": {
+    "classification": "caller-contract",
+    "construction": ".expect( \"ponko: GPU buffer was freed or belongs to another game; read a live buffer made with create_gpu_buffer\", )",
+    "reason": "read_gpu_buffer on a freed or foreign buffer: the message names the misuse and the fix; should_panic test in tests/readback.rs.",
+    "site": "src/three/readback.rs:183"
+  },
+  "src/three/readback.rs:bdc64d90c980d8b1": {
+    "classification": "caller-contract",
+    "construction": "assert!( range.start < range.end && range.end <= len, \"ponko: read_gpu_buffer range must hold at least one element and fit in the buffer's {len}; got {range:?}\" )",
+    "reason": "read_gpu_buffer with an empty or out-of-range range: the message names the buffer length and the range; should_panic tests in tests/readback.rs.",
+    "site": "src/three/readback.rs:186"
+  },
+  "src/three/readback.rs:fc4e42bd5aeadc35": {
+    "classification": "caller-contract",
+    "construction": "assert!( self.textures_live.contains(target.texture.id) && self.is_render_target(target.texture), \"ponko: render target was freed or belongs to another game; read a live one made with create_render_target\" )",
+    "reason": "read_render_target on a freed or foreign render target: the message names the fix; should_panic test in tests/readback.rs.",
+    "site": "src/three/readback.rs:229"
   },
   "src/three/resident.rs:212e5f3888780d82": {
     "classification": "forwarded-error",

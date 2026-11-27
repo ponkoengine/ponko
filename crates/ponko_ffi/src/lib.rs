@@ -142,6 +142,8 @@ mod text_shaping;
 // Bindings of 0.3.
 mod buffer_motion;
 mod motion;
+// Reading GPU buffers and render targets back (#699).
+mod readback;
 // IME composition (#410).
 mod image_limits;
 mod ime;
@@ -276,6 +278,7 @@ pub use queries2d::*;
 pub use queries3d::*;
 pub use query_cache::*;
 pub use ragdoll::*;
+pub use readback::*;
 pub use reflect::*;
 pub use replicate::*;
 pub use replication::*;

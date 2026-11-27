@@ -531,6 +531,16 @@ static void three_d() {
         auto reused = ctx.create_gpu_buffer(3);  // the freed slot comes back under a new id
         CHECK((reused.id & 0x000FFFFFu) == (spare.id & 0x000FFFFFu) && reused.id != spare.id);  // same 20-bit slot
         throws([&] { ctx.write_gpu_buffer(spare, 0, {{1, 2, 3, 4}}); });
+        // Reads back on the CPU: never answered on the frame they were asked for.
+        std::vector<std::array<float, 4>> read_values;
+        auto read = ctx.read_gpu_buffer(buffer, 60, 65);
+        CHECK(!ctx.readback(read, read_values) && read_values.empty());
+        throws([&] { ctx.read_gpu_buffer(buffer, 64, 66); });
+        throws([&] { ctx.read_gpu_buffer(buffer, 3, 3); });
+        throws([&] { ctx.read_gpu_buffer(spare, 0, 1); });
+        auto texels = ctx.read_render_target(mirror, 0, 0, 2, 2);
+        CHECK(!ctx.readback(texels, read_values));
+        throws([&] { ctx.read_render_target(mirror, 0, 0, 0, 1); });
         auto update = ctx.create_compute("update", "fn update(i: u32) { items[i].x += frame.time.y; }");
         ctx.set_compute_passes({ponko::buffer_compute_pass(update, buffer)});
         CHECK(ctx.compute_passes()[0].has_buffer && ctx.compute_passes()[0].buffer.id == buffer.id);

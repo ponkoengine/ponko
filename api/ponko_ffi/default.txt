@@ -4566,6 +4566,19 @@ impl core::fmt::Debug for ponko_ffi::PonkoRayHit
 pub fn ponko_ffi::PonkoRayHit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoRayHit
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoRayHit
+#[repr(C)] pub struct ponko_ffi::PonkoReadback
+pub ponko_ffi::PonkoReadback::id: u32
+impl core::clone::Clone for ponko_ffi::PonkoReadback
+pub fn ponko_ffi::PonkoReadback::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoReadback
+impl core::cmp::PartialEq for ponko_ffi::PonkoReadback
+pub fn ponko_ffi::PonkoReadback::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_ffi::PonkoReadback
+pub fn ponko_ffi::PonkoReadback::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoReadback
+pub fn ponko_ffi::PonkoReadback::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoReadback
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoReadback
 #[repr(C)] pub struct ponko_ffi::PonkoReceivesDecals
 pub ponko_ffi::PonkoReceivesDecals::layers: u32
 impl core::clone::Clone for ponko_ffi::PonkoReceivesDecals
@@ -7296,6 +7309,9 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ragdoll_state(*mut ponko_ffi::PonkoCtx, u64, *mut bool, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_random_bits(*const ponko_ffi::PonkoCtx) -> u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_read_events(*mut ponko_ffi::PonkoCtx, u32, usize, *mut *const core::ffi::c_void, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_read_gpu_buffer(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoGpuBuffer, u32, u32, *mut ponko_ffi::PonkoReadback) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_read_render_target(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoTexture, u32, u32, u32, u32, *mut ponko_ffi::PonkoReadback) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_readback(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoReadback, *mut [f32; 4], usize, *mut usize, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_recommended_graphics_quality(*const ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoGraphicsQuality) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_record_trace(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_reflection_camera(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoCamera3D, ponko_ffi::PonkoTexture, f32, *mut ponko_ffi::PonkoTargetCamera) -> ponko_ffi::PonkoStatus

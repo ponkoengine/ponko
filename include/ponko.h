@@ -3600,6 +3600,10 @@ typedef struct PonkoTargetEffect {
   struct PonkoMaterial material;
 } PonkoTargetEffect;
 
+typedef struct PonkoReadback {
+  uint32_t id;
+} PonkoReadback;
+
 typedef struct PonkoImeEvent {
   uint32_t kind;
   const char *text;
@@ -10039,6 +10043,27 @@ enum PonkoStatus ponko_ctx_set_gpu_buffer_motion(struct PonkoCtx *ctx,
                                                  bool keep);
 
 enum PonkoStatus ponko_ctx_reset_motion(struct PonkoCtx *ctx, uint64_t entity);
+
+enum PonkoStatus ponko_ctx_read_gpu_buffer(struct PonkoCtx *ctx,
+                                           struct PonkoGpuBuffer buffer,
+                                           uint32_t start,
+                                           uint32_t end,
+                                           struct PonkoReadback *out_read);
+
+enum PonkoStatus ponko_ctx_read_render_target(struct PonkoCtx *ctx,
+                                              struct PonkoTexture target,
+                                              uint32_t x,
+                                              uint32_t y,
+                                              uint32_t width,
+                                              uint32_t height,
+                                              struct PonkoReadback *out_read);
+
+enum PonkoStatus ponko_ctx_readback(struct PonkoCtx *ctx,
+                                    struct PonkoReadback read,
+                                    float (*values)[4],
+                                    size_t capacity,
+                                    size_t *out_len,
+                                    bool *out_ready);
 
 enum PonkoStatus ponko_game_image_limits(struct PonkoGame *game,
                                          uint32_t max_side,

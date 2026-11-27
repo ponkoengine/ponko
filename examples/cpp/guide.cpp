@@ -4038,6 +4038,58 @@ static void gpu_particles(ponko::ctx& ctx) {
 }
 // ANCHOR_END: gpu_buffers
 
+// ANCHOR: readback
+/// Burning cells per region: each texel of a 4 x 4 target adds up the
+/// 16 x 16 block of the 64 x 64 fire grid under it (red is 1 where a cell
+/// burns). The grid is the material's texture.
+static const char* count_fire_compute = R"(
+fn compute(c: Cell) -> vec4<f32> {
+    var burning = 0.0;
+    for (var y = 0; y < 16; y++) {
+        for (var x = 0; x < 16; x++) {
+            burning += textureLoad(base_texture, c.pixel * 16 + vec2<i32>(x, y), 0).x;
+        }
+    }
+    return vec4<f32>(burning, 0.0, 0.0, 0.0);
+})";
+
+struct fire_report {
+    ponko::render_target regions;
+    bool asked = false;
+    ponko::readback pending{};
+    std::vector<std::array<float, 4>> texels;  // reused for each answer
+    float burning[16] = {};                     // per region, a few frames old
+};
+
+/// Setup: after the fire's own compute pass, every frame.
+[[maybe_unused]] static fire_report count_fire(ponko::ctx& ctx, ponko::render_target fire) {
+    auto regions = ctx.create_render_target(4, 4);
+    auto count = ctx.create_compute("count fire", count_fire_compute);
+    auto desc = ponko::material_of(ponko::colors::white);
+    desc.has_texture = true;
+    desc.texture = fire;
+    auto list = ctx.compute_passes();
+    list.push_back(ponko::compute_pass_of(count, regions, ctx.create_material(desc)));
+    ctx.set_compute_passes(list);
+    return {regions};
+}
+
+/// Each frame: one read in flight, asked again once it is answered.
+[[maybe_unused]] static void read_fire(ponko::ctx& ctx, fire_report& report) {
+    if (!report.asked) {
+        report.pending = ctx.read_render_target(report.regions, 0, 0, 4, 4);
+        report.asked = true;
+    }
+    try {
+        if (!ctx.readback(report.pending, report.texels)) return;  // still on the GPU
+        for (std::size_t i = 0; i < 16; ++i) report.burning[i] = report.texels[i][0];
+    } catch (const ponko::error&) {
+        // No GPU runs compute passes here (headless): keep the last numbers.
+    }
+    report.asked = false;
+}
+// ANCHOR_END: readback
+
 // ANCHOR: gpu_instances
 void persistent_instances(ponko::ctx& ctx, ponko::mesh mesh) {
     std::vector<std::array<float,16>> transforms;
