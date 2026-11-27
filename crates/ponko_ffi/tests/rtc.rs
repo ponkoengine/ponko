@@ -2,6 +2,10 @@
 //! real lobby server on this machine: a room's host and member connect
 //! peer to peer and exchange messages. Loopback only; run with
 //! `cargo test -p ponko_ffi --features webrtc --test rtc`.
+// Empty without the feature, so a `--test '*'` glob still matches it
+// (a target with `required-features` makes the glob an error).
+#![cfg(feature = "webrtc")]
+
 use std::ptr::{null, null_mut};
 use std::time::{Duration, Instant};
 

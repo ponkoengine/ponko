@@ -7,6 +7,10 @@
 //! and STUN use real UDP sockets on loopback. Run with
 //! `cargo test -p ponko_lobby --features webrtc --test webrtc`.
 
+// Empty without the feature, so a `--test '*'` glob still matches it
+// (a target with `required-features` makes the glob an error).
+#![cfg(feature = "webrtc")]
+
 mod common;
 
 use ponko::net::lobby::LobbyEvent;

@@ -552,7 +552,7 @@ def selftest(_args):
     except Usage:
         pass
     env = build_env("aarch64-unknown-linux-gnu", "/s")
-    expect(env["PKG_CONFIG_LIBDIR"].split(os.pathsep)[0].endswith("usr/lib/aarch64-linux-gnu/pkgconfig"), "pkg-config dir")
+    expect(Path(env["PKG_CONFIG_LIBDIR"].split(os.pathsep)[0]).as_posix().endswith("usr/lib/aarch64-linux-gnu/pkgconfig"), "pkg-config dir")
     # Headers of shared libraries, made up.
     elf = bytearray(64)
     elf[:6] = b"\x7fELF\x02\x01"

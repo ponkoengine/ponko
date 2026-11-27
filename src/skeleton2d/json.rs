@@ -732,9 +732,19 @@ pub(crate) fn hex_color(text: &str) -> Result<Color, SkeletonError> {
     }
 }
 
+/// Where the folder part of `path` ends: its last `/`, or on Windows also
+/// `\` (a file path such as `C:\game\hero.json`).
+fn folder_end(path: &str) -> Option<usize> {
+    if cfg!(windows) {
+        path.rfind(['/', '\\'])
+    } else {
+        path.rfind('/')
+    }
+}
+
 /// `image` relative to the folder of the file at `path`.
 pub(crate) fn beside(path: &str, image: &str) -> String {
-    match path.rfind('/') {
+    match folder_end(path) {
         Some(i) => format!("{}/{image}", &path[..i]),
         None => image.to_string(),
     }
@@ -743,7 +753,7 @@ pub(crate) fn beside(path: &str, image: &str) -> String {
 /// `image` (an asset name) relative to the folder of the file at `path`:
 /// the inverse of [`beside`]. `None` if it isn't in that folder.
 fn relative<'a>(path: &str, image: &'a str) -> Option<&'a str> {
-    match path.rfind('/') {
+    match folder_end(path) {
         Some(i) => image.strip_prefix(&path[..=i]),
         None => Some(image),
     }
