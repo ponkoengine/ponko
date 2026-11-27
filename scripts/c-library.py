@@ -591,7 +591,7 @@ def selftest(_args):
     # The container command: right platform, read-only mounts, Linux only.
     cmd = docker_command(Path("/a/ponko-v0.2.0-linux-arm64.tar.gz"), "aarch64-unknown-linux-gnu", DOCKER_IMAGE)
     expect(cmd[:5] == ["docker", "run", "--rm", "--platform", "linux/arm64"], "arm64 container")
-    expect(cmd[cmd.index("-v") + 1].endswith(":/src:ro") and "/a:/archive:ro" in cmd, "read-only mounts")
+    expect(cmd[cmd.index("-v") + 1].endswith(":/src:ro") and f"{Path('/a')}:/archive:ro" in cmd, "read-only mounts")
     expect("ARCHIVE=ponko-v0.2.0-linux-arm64.tar.gz" in cmd and DOCKER_IMAGE in cmd, "archive and image named")
     expect(docker_command(Path("/a/x.tar.gz"), "x86_64-unknown-linux-gnu", "i")[4] == "linux/amd64", "amd64 container")
     try:
