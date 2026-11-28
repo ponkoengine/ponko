@@ -8,7 +8,10 @@
   so its read fails with `ErrorKind::Unsupported`, as every read does in
   headless runs). Staging buffers are reused, so steady reads allocate
   nothing. Readback values are not deterministic and must not feed
-  `sim_system`, replays, rollback or lockstep (STABILITY.md). The guide's
+  `sim_system`, replays, rollback or lockstep (STABILITY.md). A result is
+  freed by reading it (there is no `free`); when more than 64 finished
+  results wait unread, the engine logs one warning per run and keeps them
+  all. The guide's
   "Reading compute results on the CPU" shows reducing a grid on the GPU and
   reading a few values. C API: `ponko_ctx_read_gpu_buffer`,
   `ponko_ctx_read_render_target`, `ponko_ctx_readback`; C++:

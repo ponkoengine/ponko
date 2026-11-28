@@ -59,11 +59,18 @@ struct Slot {
     live: bool,
 }
 
+/// More finished reads than this, none of them read yet, is a game that
+/// asks and never collects: the engine says so once per run (never drops
+/// them; there is no way to free a read but to read it).
+pub(crate) const UNCOLLECTED_LIMIT: usize = 64;
+
 /// Every read of the game, by slot (see [`Readback`]).
 #[derive(Debug, Default)]
 pub(crate) struct Readbacks {
     slots: Vec<Slot>,
     ids: SlotIds,
+    /// The uncollected-results warning was given (once per run).
+    warned: bool,
 }
 
 /// Why a read can't be answered where no GPU runs.
@@ -121,6 +128,7 @@ impl Readbacks {
     /// reused from now on, and with no GPU (`gpu: false`), every read
     /// still waiting fails.
     fn settle(&mut self, frame: u64, gpu: bool) {
+        let mut uncollected = 0;
         for (slot, s) in self.slots.iter_mut().enumerate() {
             if !s.live {
                 continue;
@@ -129,10 +137,29 @@ impl Readbacks {
                 s.live = false;
                 let id = self.ids.id_in(slot);
                 self.ids.release(id);
-            } else if !gpu && matches!(s.state, State::Pending) {
+                continue;
+            }
+            if !gpu && matches!(s.state, State::Pending) {
                 s.state = State::Failed(ErrorKind::Unsupported, NO_GPU);
             }
+            if s.answered.is_none() && !matches!(s.state, State::Pending) {
+                uncollected += 1;
+            }
         }
+        if uncollected > UNCOLLECTED_LIMIT && !self.warned {
+            self.warned = true;
+            Self::warn_uncollected(uncollected);
+        }
+    }
+
+    /// Says (once per run) that `waiting` finished reads wait for the game.
+    fn warn_uncollected(waiting: usize) {
+        crate::render::traffic::warn(&format!(
+            "ponko: {waiting} readback results are waiting to be collected (more than {UNCOLLECTED_LIMIT}): \
+             the game asks for GPU data and never reads it, so they pile up in memory and nothing frees them. \
+             Read each result with `ctx.gfx.readback(read)`, which also frees it, or stop asking for \
+             results you don't read"
+        ));
     }
 
     /// How many reads are live (asked for and not reused yet).
@@ -256,7 +283,11 @@ impl Graphics {
     /// Once answered, the answer stays for the rest of that frame; from
     /// the next frame `read` is used up and gives
     /// [`ErrorKind::BadHandle`], as a handle from another game does. Read
-    /// every read you ask for: an answer nobody reads is kept.
+    /// every read you ask for: an answer nobody reads is kept, because
+    /// reading it is the only way to free it (there is no `free` for a
+    /// [`Readback`]). The engine never drops a result silently; when more
+    /// than 64 finished results are waiting to be read, it logs one
+    /// warning per run (naming `readback`) and keeps them all.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -354,6 +385,43 @@ mod tests {
         // An answer for the old id doesn't land in the new read.
         r.arrive(a.id, Ok(&[Vec4::Y]));
         assert!(matches!(r.slot_mut(b).unwrap().state, State::Pending));
+    }
+
+    #[test]
+    fn more_than_the_limit_of_uncollected_results_warns_once() {
+        let mut r = Readbacks::default();
+        let reads: Vec<_> = (0..UNCOLLECTED_LIMIT).map(|_| r.start(1)).collect();
+        for read in &reads {
+            r.arrive(read.id, Ok(&[Vec4::X]));
+        }
+        r.settle(2, true);
+        assert!(!r.warned, "exactly the limit is fine");
+        // Reads still waiting for the GPU don't count: they aren't results yet.
+        let pending = r.start(2);
+        r.settle(3, true);
+        assert!(!r.warned);
+        let one_more = r.start(2);
+        r.arrive(one_more.id, Ok(&[Vec4::Y]));
+        r.settle(3, true);
+        assert!(r.warned, "one over the limit warns");
+        // Nothing is dropped: every result is still there to be read.
+        assert_eq!(r.live(), UNCOLLECTED_LIMIT + 2);
+        assert!(matches!(r.slot_mut(reads[0]).unwrap().state, State::Done));
+        assert!(matches!(r.slot_mut(pending).unwrap().state, State::Pending));
+    }
+
+    #[test]
+    fn results_that_are_read_never_count_as_uncollected() {
+        let mut r = Readbacks::default();
+        // A game that asks every frame and reads each answer: never warns.
+        for frame in 1..=200u64 {
+            let read = r.start(frame);
+            r.arrive(read.id, Ok(&[Vec4::X]));
+            r.slot_mut(read).unwrap().answered = Some(frame + 1);
+            r.settle(frame + 1, true);
+        }
+        assert!(!r.warned);
+        assert!(r.live() <= 2, "slots are reused: {} live", r.live());
     }
 
     #[test]
