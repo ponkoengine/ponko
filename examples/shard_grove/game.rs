@@ -280,7 +280,8 @@ pub struct View {
 /// `Character`; this is the rest of its state.
 #[derive(Component, Debug, Clone, Default)]
 pub struct Warden {
-    /// The way it faces (0 looks along -Z).
+    /// The way it faces: a turn about +Y (0 looks along +Z, see
+    /// [`facing_of`]).
     pub facing: f32,
     /// Seconds of knockback left, and its velocity.
     pub knocked: f32,
@@ -879,13 +880,21 @@ pub fn continue_game(ctx: &mut Ctx) -> bool {
 pub fn start_run(ctx: &mut Ctx, run: Run, at: Vec3) {
     clear_run(ctx);
     let assets = ctx.world.resource::<GroveAssets>().clone();
+    // It starts looking the way the view looks (-Z).
+    let facing = facing_of(Vec3::NEG_Z);
     ctx.world.spawn((
-        Transform::at(at),
+        Transform {
+            rotation: Quat::from_rotation_y(facing),
+            ..Transform::at(at)
+        },
         Character::new(1.8, 0.35),
         Model::new(assets.warden),
         assets.warden_skeleton.clone(),
         Animator::new(assets.warden_graph.clone()),
-        Warden::default(),
+        Warden {
+            facing,
+            ..Default::default()
+        },
         CameraTarget, // the engine's chase camera follows it
         RunEntity,
     ));
@@ -984,9 +993,15 @@ pub fn flat_distance(a: Vec3, b: Vec3) -> f32 {
     vec2(a.x - b.x, a.z - b.z).length()
 }
 
-/// The way a direction on the ground faces (0 looks along -Z).
+/// Where the characters' models look before they are turned: glTF's
+/// forward, +Z (both models are made that way).
+pub const MODEL_FORWARD: Vec3 = Vec3::Z;
+
+/// The turn about +Y that makes a model look along a direction on the
+/// ground: `Quat::from_rotation_y(facing_of(d)) * MODEL_FORWARD` points
+/// along `d` (0 looks along +Z).
 pub fn facing_of(direction: Vec3) -> f32 {
-    (-direction.x).atan2(-direction.z)
+    direction.x.atan2(direction.z)
 }
 
 /// One tick of play.

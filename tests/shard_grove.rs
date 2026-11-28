@@ -190,11 +190,110 @@ fn walking_follows_the_view() {
     assert!((START.z - at.z - 2.7).abs() < 0.2, "walked forward 2.7 m: {at}");
     assert!((at.x - 1.8).abs() < 0.2, "then 1.8 m along +X: {at}");
     let (e, _) = warden(&mut world).unwrap();
-    let facing = world.get::<Warden>(e).unwrap().facing;
+    let looks = world.get::<Transform>(e).unwrap().rotation * MODEL_FORWARD;
+    assert!(looks.dot(Vec3::X) > 0.999, "faces +X: {looks}");
+}
+
+/// Where a model looks once its transform turns it.
+fn looks(t: &Transform) -> Vec3 {
+    t.rotation * MODEL_FORWARD
+}
+
+#[test]
+fn the_models_look_along_their_forward_axis() {
+    // The rest pose, from the files: the warden's left arm is on its left
+    // and the crawler's mouth and brows are in front. Looking along
+    // MODEL_FORWARD with +Y up, the left is up x forward.
+    let dir = data_dir("model-forward");
+    let world = scripted(&dir, |_| {}).run_headless(1, |_| {});
+    let assets = world.resource::<GroveAssets>();
+    let at = |s: &Skeleton, name: &str| {
+        let joint = s.find(name).unwrap_or_else(|| panic!("a joint {name}"));
+        s.joint_matrix(joint).w_axis.truncate()
+    };
+    let left = Vec3::Y.cross(MODEL_FORWARD);
+    let w = &assets.warden_skeleton;
+    let arms = at(w, "UpperArm.L") - at(w, "UpperArm.R");
     assert!(
-        (facing + std::f32::consts::FRAC_PI_2).abs() < 0.01,
-        "faces +X: {facing}"
+        arms.normalize().dot(left) > 0.9,
+        "the warden's left arm on its left: {arms}"
     );
+    let c = &assets.crawler_skeleton;
+    let mouth = at(c, "Mouth") - at(c, "Body");
+    assert!(
+        mouth.with_y(0.0).normalize().dot(MODEL_FORWARD) > 0.9,
+        "the crawler's mouth in front: {mouth}"
+    );
+    let brows = at(c, "Eyebrow.L") - at(c, "Eyebrow.R");
+    assert!(
+        brows.normalize().dot(left) > 0.9,
+        "the crawler's left brow on its left: {brows}"
+    );
+}
+
+#[test]
+fn the_warden_and_the_crawlers_face_the_way_they_move() {
+    let dir = data_dir("facing");
+    // Each check: (what moved, where it was a tick before, where it is, where it looks).
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(&str, Vec3, Vec3, Vec3)>::new()));
+    let log = seen.clone();
+    let mut warden_before = None;
+    let mut crawlers_before: Vec<Vec3> = Vec::new();
+    let mut world = scripted(&dir, move |ctx| {
+        let tick = ctx.time.sim_tick();
+        match tick {
+            1 => intent(ctx).menu = Some(Menu::NewGame),
+            // Forward, right, back-left and back, relative to the view.
+            10 => intent(ctx).movement = vec2(0.0, 1.0),
+            30 => intent(ctx).movement = vec2(1.0, 0.0),
+            50 => intent(ctx).movement = vec2(-1.0, -1.0),
+            70 => intent(ctx).movement = vec2(0.0, -1.0),
+            90 => intent(ctx).movement = Vec2::ZERO,
+            _ => {}
+        }
+        if tick < 3 {
+            return;
+        }
+        // What the last tick did: it moved from `before` to `now` and turned
+        // the model.
+        if let Some((e, now)) = warden(&mut ctx.world) {
+            let t = *ctx.world.get::<Transform>(e).expect("a transform");
+            if let Some(before) = warden_before
+                && [29, 49, 69, 89].contains(&tick)
+            {
+                log.borrow_mut().push(("warden", before, now, looks(&t)));
+            }
+            warden_before = Some(now);
+        }
+        let mut crawlers = Vec::new();
+        ctx.world
+            .query::<(&Transform, &Crawler)>()
+            .for_each(|(t, _)| crawlers.push((t.position, looks(t))));
+        if crawlers_before.len() == crawlers.len() && tick % 10 == 9 {
+            for ((now, looking), before) in crawlers.iter().zip(&crawlers_before) {
+                log.borrow_mut().push(("crawler", *before, *now, *looking));
+            }
+        }
+        crawlers_before = crawlers.iter().map(|c| c.0).collect();
+    })
+    .run_headless(91, |_| {});
+    assert!(warden(&mut world).is_some(), "still playing");
+    let seen = seen.borrow();
+    let mut checked = [0, 0];
+    for &(who, before, now, looking) in seen.iter() {
+        let moved = (now - before).with_y(0.0);
+        if moved.length() < 0.01 {
+            continue; // standing (a stunned or waiting crawler)
+        }
+        let moved = moved.normalize();
+        assert!(
+            looking.dot(moved) > 0.97,
+            "the {who} moves along {moved} but looks along {looking}"
+        );
+        checked[usize::from(who == "crawler")] += 1;
+    }
+    assert_eq!(checked[0], 4, "the warden walked four ways: {seen:?}");
+    assert!(checked[1] >= 10, "crawlers were seen moving: {checked:?} {seen:?}");
 }
 
 #[test]
