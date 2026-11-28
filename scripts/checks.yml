@@ -11,7 +11,7 @@
 # scripts/check-feature-coverage.py reads this file as text: every cargo
 # feature needs clippy, test and (for docs.rs) doc lines here, and every
 # browser smoke runner in web/smoke and web/gallery needs a step that names
-# it (CONTRIBUTING.md, "Adding or changing a cargo feature"). The quick
+# it (book/src/contributing.md, "Adding a cargo feature"). The quick
 # checks most changes need are listed in AGENTS.md, "Integration checks".
 #
 # The environment the commands expect:
@@ -26,8 +26,9 @@ env:
 jobs:
   # An optional local list of words a maintainer never wants committed.
   # The list is never in this repo: scripts/leak-check.sh reads it from
-  # $LEAK_WORDS or a local file, and skips the check without one. `scripts/leak-check.sh install` runs the
-  # file check before every local commit.
+  # $LEAK_WORDS or a local file, and skips the check without one.
+  # `scripts/leak-check.sh install` runs the file check before every local
+  # commit.
   leaks:
     local-os: [Linux, macOS, Windows]
     name: Leak check
@@ -74,7 +75,7 @@ jobs:
         run: |
           python3 scripts/changelog.py --check
           python3 scripts/changelog.py --selftest
-      # The release guard (CONTRIBUTING.md "Releasing") and the guide's note,
+      # The release guard (RELEASING.md) and the guide's note,
       # the first run from crates.io, and the release-time CI
       # (scripts/release-matrix.yml, not enabled) still made from this file.
       - name: Release scripts
@@ -914,7 +915,7 @@ jobs:
   # main, a break this change adds passes only with the `breaking` label and a
   # `### Breaking changes` changelog fragment; and the label itself fails
   # without such a fragment, break found or not. Breaks that earlier merged
-  # changes announced don't fail later pull requests. Read CONTRIBUTING.md,
+  # changes announced don't fail later pull requests. Read MAINTAINING.md,
   # "Semver checks", for how to act on a failure.
   #
   # The tool reads rustdoc's JSON, whose format changes with the Rust release,
@@ -971,7 +972,7 @@ jobs:
         run: python3 scripts/semver-checks.py run
 
   # The public API of every published crate, listed in api/ (scripts/api-snapshots.py,
-  # CONTRIBUTING.md "API snapshots"). The job regenerates the listing and fails
+  # MAINTAINING.md "API snapshots"). The job regenerates the listing and fails
   # with a diff when it differs from the committed files, so every added,
   # renamed or removed public item shows up in review, not only the breaking
   # ones (the Semver job above). The listing comes from `cargo public-api`,
@@ -1241,7 +1242,7 @@ jobs:
   # The C API under AddressSanitizer and UndefinedBehaviorSanitizer: the C and
   # C++ test programs built with both against a debug library, and the
   # ponko_ffi tests with the Rust side built with AddressSanitizer
-  # (CONTRIBUTING.md, "Unsafe code and sanitizers"). One platform: macOS on
+  # (book/src/contributing.md, "Running the unsafe-code checks"). One platform: macOS on
   # Apple silicon, where the commands were checked.
   sanitizers:
     local-tags: [native]
@@ -1402,7 +1403,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('web/smoke/package-lock.json') }}
       - name: Install the runner and the browsers (Chromium with its headless shell, Firefox, WebKit)
-        local-skip: Install the browsers and npm dependencies before the run (see CONTRIBUTING.md).
+        local-skip: Install the browsers and npm dependencies before the run (see book/src/contributing.md, "Running local checks").
         run: |
           node --version
           npm ci --prefix web/smoke --no-audit --no-fund
@@ -1781,7 +1782,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - name: Install the runner and Chromium
-        local-skip: Install the browsers and npm dependencies before the run (see CONTRIBUTING.md).
+        local-skip: Install the browsers and npm dependencies before the run (see book/src/contributing.md, "Running local checks").
         run: |
           npm ci --prefix web/smoke --no-audit --no-fund
           node web/smoke/node_modules/playwright-core/cli.js install chromium
@@ -1838,7 +1839,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - name: Install the runner, Chromium and WebKit
-        local-skip: Install the browsers and npm dependencies before the run (see CONTRIBUTING.md).
+        local-skip: Install the browsers and npm dependencies before the run (see book/src/contributing.md, "Running local checks").
         run: |
           npm ci --prefix web/smoke --no-audit --no-fund
           node web/smoke/node_modules/playwright-core/cli.js install chromium webkit

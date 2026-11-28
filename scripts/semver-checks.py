@@ -14,7 +14,7 @@ the last release on crates.io. What a break means depends on the branch:
              What gates is the break this change adds, found by comparing
              with the commit it is based on. It passes only with the
              `breaking` label and a changelog fragment that has a
-             `### Breaking changes` section (CONTRIBUTING.md, "Semver checks").
+             `### Breaking changes` section (MAINTAINING.md, "Semver checks").
              The other way round, a pull request with the `breaking` label
              must carry such a fragment, whether or not the tool found a
              break: the label promises a migration note, and the tool does
@@ -118,7 +118,7 @@ def verdict(mode, breaks, new_breaks, errors, labeled, fragment):
         missing.append(f'a changelog fragment with a `### {HEADING}` section naming the replacement')
     if missing:
         return False, lines + ['Missing: ' + ' and '.join(missing) + '.',
-                               'Or undo the break: CONTRIBUTING.md, "Semver checks".']
+                               'Or undo the break: MAINTAINING.md, "Semver checks".']
     return True, lines + [f'Allowed: `{LABEL}` label and a `### {HEADING}` fragment are there.']
 
 

@@ -15,7 +15,7 @@ change, and the release folds them in.
 - A change that breaks a published crate's API needs a `### Breaking changes`
   section, and the pull request the `breaking` label: the Semver check
   fails a break it finds without both, and fails the label without the
-  section (CONTRIBUTING.md, "Breaking changes: the migration note"). A
+  section (MAINTAINING.md, "Breaking changes: the migration note"). A
   `- **Breaking:**` bullet under another heading is refused: move it there.
 - The release tells the entries by area (Rendering, Audio, C and C++, ...),
   guessed from the file name and text. `python3 scripts/changelog.py --areas`
@@ -88,7 +88,7 @@ first lines and `Instead:` into the CHANGELOG's **Breaking changes** block
 Where it is cheap, don't break at once: keep the old item for one minor as
 `#[deprecated(note = "use ...")]` and list that under `### Deprecated`. The
 `Breaking changes` entry comes with the removal in the next minor
-(STABILITY.md, "Releases"; CONTRIBUTING.md has the rule of thumb for "cheap").
+(STABILITY.md, "Releases"; MAINTAINING.md has the rule of thumb for "cheap").
 Only a minor release (0.y.0) carries breaking entries; the release checks refuse
 them in a patch release.
 

@@ -22,5 +22,5 @@ The scripts only run things on the machine they are on and print or write files 
 - **Every failure becomes an issue**; write its number on the line. Give the issue the revision, the machine and the exact command.
 - **Record the revision** (`git rev-parse HEAD`) once per sheet. Use a clean checkout of `main` unless a sheet says otherwise.
 - **Report** by pasting the filled lines into ONE comment on the issue the sheet names (each sheet ends with where). Keep personal details out: use hardware names, not people's names or addresses.
-- **Windows:** start from a Visual Studio Developer PowerShell with the C++ linker and SDK on `PATH`, and replace `python3` with `py -3` (see "Local checks" in `CONTRIBUTING.md`).
+- **Windows:** start from a Visual Studio Developer PowerShell with the C++ linker and SDK on `PATH`, and replace `python3` with `py -3` (see "Running local checks" in `book/src/contributing.md`).
 - **Do not leave builds behind:** these runs build the engine; delete `target/` when you are done.

@@ -2,7 +2,7 @@
 # crates, allowed sources. Run it on pull requests that change Cargo.toml,
 # Cargo.lock or this file, and from time to time on `main`, with
 # `cargo install --locked cargo-deny` and `cargo deny --locked check`
-# (CONTRIBUTING.md, "Dependency audit").
+# (MAINTAINING.md, "Dependency audit").
 #
 # Every exception below carries a `reason`. An exception that no longer
 # matches anything is reported as a warning: delete it.

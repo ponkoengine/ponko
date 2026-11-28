@@ -1,6 +1,6 @@
 //! `shared` lends the instance array to the tasks of the parallel compare as
 //! atomic words (an `unsafe` cast). This test does what those tasks do, on a
-//! few instances so that it runs under Miri (CONTRIBUTING.md, "Unsafe code"):
+//! few instances so that it runs under Miri (book/src/contributing.md, "Unsafe code"):
 //! the full extraction tests take minutes per frame there.
 
 use super::*;

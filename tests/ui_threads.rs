@@ -2,7 +2,7 @@
 //! layout engine's lengths could hold a raw pointer, which the engine never
 //! makes. These tests move a tree to another thread and read one from
 //! several at once, as a world-space panel (a `Ui` in a component) is in
-//! parallel queries. They run under Miri (CONTRIBUTING.md, "Unsafe code"),
+//! parallel queries. They run under Miri (book/src/contributing.md, "Unsafe code"),
 //! which skips the layout passes: measuring a leaf loads the built-in font,
 //! which takes minutes there and has no unsafe code. The layouts themselves,
 //! the values that could hold a pointer, are still read and changed.

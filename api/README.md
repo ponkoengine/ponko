@@ -11,7 +11,7 @@ After changing public API, run:
 python3 scripts/api-snapshots.py update
 ```
 
-CONTRIBUTING.md, "API snapshots", has the details (the tools it needs, what the
+MAINTAINING.md, "API snapshots", has the details (the tools it needs, what the
 CI job does, how this relates to the Semver checks job).
 
 | File | Feature set |

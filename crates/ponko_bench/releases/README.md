@@ -2,7 +2,7 @@
 
 Wall-clock baselines of `ponko_bench`, one folder per release and machine:
 `<version>/<machine>/run-<n>.json`, five runs on one idle machine, recorded
-for the release pull request (CONTRIBUTING.md, "Releasing") and linked from
+for the release pull request (RELEASING.md, step 3) and linked from
 the release notes. The machine folder is the name `bench_track` gives the
 machine (`<os>-<arch>-<cpu>`, for example `macos-aarch64-apple-m4-max`, or
 `PONKO_BENCH_MACHINE`).

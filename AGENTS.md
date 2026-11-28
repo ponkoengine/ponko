@@ -64,12 +64,13 @@ python3 scripts/run-checks.py
 
 Review skipped checks and failures in `target/check-results/summary.txt`. The
 full failure output is in `results.json` alongside it. Windowed checks require
-explicit opt-in. See [Local checks](CONTRIBUTING.md#local-checks) for tools and
-nightly scheduling.
+explicit opt-in. See [Running local checks](book/src/contributing.md#running-local-checks)
+for tools, and [MAINTAINING.md](MAINTAINING.md#nightly-runs-on-maintainer-machines)
+for nightly scheduling.
 
 If you add or change a Cargo feature or a web smoke runner, give it its lines
 in `scripts/checks.yml` and run `python3 scripts/check-feature-coverage.py`.
-Run the feature's own commands locally. CONTRIBUTING.md, "Adding or changing
+Run the feature's own commands locally. `book/src/contributing.md`, "Adding
 a cargo feature", has the details. Use the relevant inventory checks for
 changes to the panic audit, maturity levels, unsafe code and C pointer
 ownership.
@@ -102,8 +103,8 @@ done
 
 If you touched `crates/ponko_ffi`, `include/` or `examples/cpp`, also run the C
 and C++ test programs and the `ponko_ffi` tests under AddressSanitizer and
-UndefinedBehaviorSanitizer: the commands are in CONTRIBUTING.md, "Unsafe code
-and sanitizers".
+UndefinedBehaviorSanitizer: the commands are in `book/src/contributing.md`,
+"Running the unsafe-code checks".
 
 ## Project rules
 

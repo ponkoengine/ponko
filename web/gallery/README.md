@@ -115,7 +115,7 @@ pointer, so the check makes `requestPointerLock` succeed without locking.
 release notes already link, `https://<owner>.github.io/<repository>/` (for this
 repository <https://ponkoengine.github.io/ponko/>), and a maintainer publishes
 it by hand by pushing the `gh-pages` branch.** There is no CI to do it (see
-CONTRIBUTING.md), and there is no separate domain for the gallery. The address
+RELEASING.md), and there is no separate domain for the gallery. The address
 is not written in the tooling: `web/gallery/lib.mjs` and
 `scripts/release-check.py` derive it from the project's URL in
 [`PROJECT_URL`](../../PROJECT_URL), and `scripts/project-url.py check` covers
@@ -125,11 +125,11 @@ host other than github.com until it is made).
 
 The maintainer who makes a release builds the gallery for the tag
 (`--ref vX.Y.Z`) and checks every page in headless Chromium on WebGL2 (the
-commands are in CONTRIBUTING.md, "Releasing"). After the release is
+commands are in RELEASING.md, step 5.7). After the release is
 published, they put the built folder on the `gh-pages` branch, which GitHub
 Pages serves, for a release (not a candidate) that is the newest version, so
 a patch release of an older minor doesn't replace the newer gallery. GitHub
-Pages is set up once by a maintainer (CONTRIBUTING.md, "One-time setup").
+Pages is set up once by a maintainer (RELEASING.md, "One-time setup").
 
 The branch holds one commit, the newest gallery (a site is hundreds of
 megabytes, so old galleries must not pile up in the history). From the
