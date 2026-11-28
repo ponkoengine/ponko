@@ -579,7 +579,9 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     }
     s.unlit = material.emissive.w != 0.0;
     if MATERIAL_LAYERS {
-        fill_layers(s, in.uv, in.uv1, in.world, geometric, in.normal);
+        // Here, not in `fill_layers`: see `ScreenSteps`.
+        let steps = ScreenSteps(dpdx(in.world), dpdy(in.world), dpdx(in.uv), dpdy(in.uv), dpdx(in.uv1), dpdy(in.uv1));
+        fill_layers(s, in.uv, in.uv1, steps, geometric, in.normal);
     }
     s = surface(s);
     s.roughness = clamp(s.roughness, 0.03, 1.0);
