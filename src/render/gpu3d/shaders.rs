@@ -1777,3 +1777,59 @@ fn build_at_once(device: &wgpu::Device, mut builds: Vec<&mut AtOnce<'_>>) {
 
 #[cfg(target_arch = "wasm32")]
 fn build_at_once(_device: &wgpu::Device, _builds: Vec<&mut AtOnce<'_>>) {}
+
+#[cfg(test)]
+mod derivative_tests {
+    use super::{MESH_PRELUDE, compose_compute};
+
+    /// The lines of `code` that take a screen derivative, directly or
+    /// through an implicit-derivative sample.
+    fn implicit_derivatives(code: &str) -> Vec<String> {
+        const OPS: [&str; 9] = [
+            "dpdx",
+            "dpdy",
+            "fwidth",
+            "dpdxCoarse",
+            "dpdxFine",
+            "textureSample(",
+            "textureSampleBias(",
+            "textureSampleCompare(",
+            "fwidthFine",
+        ];
+        code.lines()
+            .enumerate()
+            .filter(|(_, line)| {
+                let code = line.split("//").next().unwrap();
+                OPS.iter().any(|op| code.contains(op))
+            })
+            .map(|(n, line)| format!("{}: {}", n + 1, line.trim()))
+            .collect()
+    }
+
+    /// Every compute pass and material includes the mesh prelude, and runs
+    /// most of it nowhere: in a compute shader nothing calls it, and in a
+    /// material without layers the layer code sits behind a `false`
+    /// constant. Safari's WebGPU still rejects an implicit derivative in such
+    /// code ("requires uniform control flow"), which fails every pipeline of
+    /// the module: the whole 3D scene draws black. So the prelude takes none:
+    /// derivatives come from the fragment code in `mesh_main.wgsl`.
+    #[test]
+    fn the_shared_prelude_takes_no_screen_derivatives() {
+        let found = implicit_derivatives(MESH_PRELUDE);
+        assert!(
+            found.is_empty(),
+            "take the derivative in mesh_main.wgsl and pass it in (see `ScreenSteps`): {found:#?}"
+        );
+        // So a compute pass has none either, unless the game's code does.
+        let compute = compose_compute("fn compute(c: Cell) -> vec4<f32> { return vec4<f32>(0.0); }");
+        assert!(
+            implicit_derivatives(&compute).is_empty(),
+            "{:#?}",
+            implicit_derivatives(&compute)
+        );
+        // The check sees what Safari rejected.
+        let rejected = "fn fill(uv: vec2<f32>) {\n    texel = textureSampleBias(custom_texture0, material_sampler, uv, 0.0);\n    let d = dpdx(uv); // a comment: dpdy\n}\n";
+        assert_eq!(implicit_derivatives(rejected).len(), 2);
+        assert!(implicit_derivatives("// dpdx in a comment\nlet g = textureSampleGrad(t, s, uv, a, b);\n").is_empty());
+    }
+}

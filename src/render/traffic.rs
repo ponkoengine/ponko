@@ -722,7 +722,16 @@ impl Uploading<'_, wgpu::Device> {
         {
             return buffer;
         }
-        let buffer = self.to.create_buffer_init(desc);
+        let unmapped = if cfg!(target_arch = "wasm32") {
+            FILL_QUEUE.with(|q| {
+                q.borrow()
+                    .as_ref()
+                    .and_then(|queue| init_unmapped(self.to, queue, desc))
+            })
+        } else {
+            None
+        };
+        let buffer = unmapped.unwrap_or_else(|| self.to.create_buffer_init(desc));
         created(buffer.size());
         add(self.kind, desc.contents.len() as u64);
         buffer
@@ -759,6 +768,58 @@ impl Uploading<'_, wgpu::Device> {
         add(self.kind, desc.contents.len() as u64);
         Some(buffer)
     }
+}
+
+thread_local! {
+    /// The queue that fills new buffers on the web (see [`init_unmapped`]),
+    /// once WebGPU is open.
+    static FILL_QUEUE: std::cell::RefCell<Option<wgpu::Queue>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Makes [`Uploading::create_buffer_init`] fill new buffers through `queue`
+/// on the web (see [`init_unmapped`]).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn fill_new_buffers_with(queue: &wgpu::Queue) {
+    FILL_QUEUE.with(|q| *q.borrow_mut() = Some(queue.clone()));
+}
+
+/// `DeviceExt::create_buffer_init` without mapping the buffer: it is made
+/// empty, and its contents written in with `queue`. They land before
+/// anything submitted after this reads them. `None` (nothing made) for a
+/// buffer that can be mapped for writing, which can't take `COPY_DST`.
+///
+/// Safari on iOS sometimes gives an empty range for a buffer made mapped
+/// (`getMappedRange` returns 0 bytes, with the device fine), and the game
+/// stops on its first upload. So the web makes no buffer mapped; native
+/// keeps the mapped path, which saves a copy.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn init_unmapped(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    desc: &wgpu::util::BufferInitDescriptor<'_>,
+) -> Option<wgpu::Buffer> {
+    if desc.usage.contains(wgpu::BufferUsages::MAP_WRITE) {
+        return None;
+    }
+    // Sized as `create_buffer_init` sizes it: whole 4-byte words.
+    let size = (desc.contents.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: desc.label,
+        size,
+        usage: desc.usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if size == 0 {
+        return Some(buffer);
+    }
+    if desc.contents.len() as u64 == size {
+        queue.write_buffer(&buffer, 0, desc.contents);
+    } else {
+        let mut padded = desc.contents.to_vec();
+        padded.resize(size as usize, 0);
+        queue.write_buffer(&buffer, 0, &padded);
+    }
+    Some(buffer)
 }
 
 /// `Device::create_buffer`, counted.
@@ -1135,6 +1196,56 @@ pub(crate) fn take() -> GpuUploads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The web's way of filling a new buffer (no mapping) gives the GPU the
+    /// same bytes as `create_buffer_init`, padded to whole words.
+    #[test]
+    #[cfg(feature = "3d")]
+    fn buffers_filled_through_the_queue_hold_their_contents() {
+        let Some(crate::render::render_test_support::TestGpu { device, queue, .. }) =
+            crate::render::render_test_support::gpu()
+        else {
+            return;
+        };
+        let read = |buffer: &wgpu::Buffer| {
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: buffer.size(),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(buffer, 0, &readback, 0, buffer.size());
+            queue.submit([encoder.finish()]);
+            readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            readback.get_mapped_range(..).unwrap().to_vec()
+        };
+        let desc = |contents: &'static [u8], usage| wgpu::util::BufferInitDescriptor {
+            label: Some("filled"),
+            contents,
+            usage,
+        };
+        // Six bytes: padded to eight, as `create_buffer_init` pads them.
+        let filled = init_unmapped(
+            &device,
+            &queue,
+            &desc(&[1, 2, 3, 4, 5, 6], wgpu::BufferUsages::COPY_SRC),
+        )
+        .expect("a buffer that isn't mapped for writing");
+        let mapped = device.create_buffer_init(&desc(&[1, 2, 3, 4, 5, 6], wgpu::BufferUsages::COPY_SRC));
+        assert_eq!(filled.size(), mapped.size());
+        assert_eq!(read(&filled), [1, 2, 3, 4, 5, 6, 0, 0]);
+        assert_eq!(read(&filled), read(&mapped));
+        assert!(filled.usage().contains(wgpu::BufferUsages::COPY_DST));
+        // Empty contents make an empty buffer, as there.
+        let empty = init_unmapped(&device, &queue, &desc(&[], wgpu::BufferUsages::UNIFORM)).unwrap();
+        assert_eq!(empty.size(), 0);
+        // A buffer mapped for writing can't take COPY_DST: left to the
+        // mapped path.
+        let usage = wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC;
+        assert!(init_unmapped(&device, &queue, &desc(&[1, 2, 3, 4], usage)).is_none());
+    }
 
     #[test]
     fn counts_add_up_by_kind_and_reset_when_taken() {
