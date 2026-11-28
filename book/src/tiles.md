@@ -1,8 +1,8 @@
 # Sprite sheets, animation and tilemaps
 
 > **Maturity: [proven](maturity.md).** Game: Ember Hop's Tiled levels,
-> autotiled ground and tile colliders, packaged and played on Linux, macOS and
-> Windows. Tests: `tests/tilemaps.rs`, `tests/tiles.rs`,
+> autotiled ground and tile colliders, packaged and played by the list of checks (recorded
+> on macOS). Tests: `tests/tilemaps.rs`, `tests/tiles.rs`,
 > `tests/tilemap_physics.rs`. Platforms: Linux, macOS and Windows, headless
 > (the workspace tests in the list of checks). Graphics: the packaged games
 > run in a window on Linux (software Vulkan under Xvfb), macOS and Windows

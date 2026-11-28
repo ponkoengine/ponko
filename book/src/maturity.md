@@ -12,8 +12,8 @@ are written in `STABILITY.md`; here they are again:
 
 | Level | Criteria | What it promises |
 |---|---|---|
-| **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) plays that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
-| **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game played on all three systems rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
+| **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) has jobs that play that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. What has run so far: the list on macOS, with both packages played headless (the guide's "Check results: macOS"); parts of it on Windows; nothing on Linux yet. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
+| **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game that the list of checks plays rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
 | **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: its public items are outside the versions' promise (STABILITY.md, "Unstable"): they may change or be removed in any release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
 
 - A level is assigned from what the repository records: the tests in the list
@@ -46,27 +46,27 @@ Chapters: 21 proven, 63 tested, 7 experimental.
 | [In 3D](cookbook/three-d.md) | **tested** | none | — |
 | [Levels and objects](cookbook/world.md) | **tested** | none | — |
 | [Sound and saves](cookbook/sound-and-saves.md) | **tested** | none | — |
-| [Entities, components, queries](ecs.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows | — |
-| [Systems and the frame](systems.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows | — |
+| [Entities, components, queries](ecs.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) | — |
+| [Systems and the frame](systems.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) | — |
 | [Plugins for other crates](plugins.md) | **tested** | none | a reference game that uses it |
-| [Game states: menus, loading, playing, paused](states.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (title, play, pause and end screens) | — |
+| [Game states: menus, loading, playing, paused](states.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) (title, play, pause and end screens) | — |
 | [Declared system access](system-access.md) | **tested** | none | a reference game that uses it |
 | [Parallel systems](parallel-systems.md) | **tested** | none | a reference game that uses it |
-| [Ctx and its services](services.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows | — |
-| [Window service](window.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows, in a window | — |
+| [Ctx and its services](services.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) | — |
+| [Window service](window.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS), in a window | — |
 | [HDR displays](hdr.md) | **experimental** | none | no HDR display has been looked at on any system (the chapter's platform matrix) |
 | [Input: keyboard, mouse, gamepads](input.md) | **tested** | Coin Dash and Ember Hop read keys, the mouse and gamepads, with scripted input | a recorded run with real devices: the smoke runs script their input |
 | [Controllers: rumble, prompts, motion, players](controllers.md) | **tested** | none | real controllers: rumble, motion and prompts on a device are checked by hand |
-| [Named input actions](actions.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (Coin Dash rebinds its controls) | — |
+| [Named input actions](actions.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) (Coin Dash rebinds its controls) | — |
 | [Touch: gestures and on-screen controls](touch.md) | **tested** | Coin Dash and Ember Hop have touch controls; a test plays Coin Dash by touch | a run on a touch device: mobile is not a validated platform |
-| [Events: messages between systems](events.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows | — |
-| [The simulation clock](sim-clock.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (fixed-step rules) | — |
+| [Events: messages between systems](events.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) | — |
+| [The simulation clock](sim-clock.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) (fixed-step rules) | — |
 | [Spatial queries](spatial.md) | **tested** | none (the Legions showcase uses it) | a reference game that uses it |
 | [Pathfinding with flow fields](pathfinding.md) | **tested** | none (the Legions showcase uses it) | a reference game that uses it |
 | [Game AI: behaviour trees and utility scoring](ai.md) | **tested** | none: the reference games keep their AI state by hand | a reference game that uses it |
 | [Attachments: things that follow things](attachments.md) | **tested** | none | a reference game that uses it |
-| [The entity hierarchy](hierarchy.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (Ember Hop's prefabs with children) | — |
-| [Physics: bodies that fall, stack and bounce](physics.md) | **proven** | Ember Hop, packaged and played on Linux, macOS and Windows | — |
+| [The entity hierarchy](hierarchy.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) (Ember Hop's prefabs with children) | — |
+| [Physics: bodies that fall, stack and bounce](physics.md) | **proven** | Ember Hop, packaged and played by the list of checks (recorded on macOS) | — |
 | [Multiplayer: pick a model](multiplayer.md) | **tested** | none | a reference game and a run over a real network |
 | [Replication: the server owns the world](replication.md) | **tested** | none | a reference game and a run over a real network |
 | [Lockstep, rollback and your own protocol](networking.md) | **tested** | none | a reference game and a run over a real network |
@@ -74,16 +74,16 @@ Chapters: 21 proven, 63 tested, 7 experimental.
 | [Lobbies, matchmaking and relays](lobby.md) | **tested** | none | a reference game and a public deployment |
 | [Peer to peer over WebRTC](webrtc.md) | **experimental** | none | the browser side never ran in a browser, and no real NAT, public STUN or TURN server was used (the chapter's "Not checked") |
 | [Putting a game online](online.md) | **tested** | none | a reference game and a public deployment |
-| [Drawing](drawing.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows | — |
-| [Camera, text and UI](camera-ui.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (Ember Hop's following camera, both games' text) | — |
+| [Drawing](drawing.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) | — |
+| [Camera, text and UI](camera-ui.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) (Ember Hop's following camera, both games' text) | — |
 | [Several cameras: split screen and minimaps](viewports.md) | **tested** | none | a reference game that uses it |
 | [VR and XR: where the engine stands](xr.md) | **experimental** | none; a stereo prototype draws Shard Grove's level offscreen | a headset: no OpenXR runtime, per-eye projections or tracked input yet; XR is not a goal of any release |
-| [Retained game UI](ui.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (Coin Dash's menus and settings) | screen readers are checked by hand (Screen reader records) |
+| [Retained game UI](ui.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) (Coin Dash's menus and settings) | screen readers are checked by hand (Screen reader records) |
 | [Widget gallery](ui-widgets.md) | **tested** | none | a reference game that uses it |
 | [UI animation](ui-animation.md) | **tested** | none | a reference game that uses it |
 | [Screen reader records](ui-accessibility.md) | **tested** | Coin Dash names its controls for screen readers | the records with a real screen reader were made on macOS only; none yet for Windows or Linux |
-| [Localization](localization.md) | **proven** | Coin Dash, packaged and played on Linux, macOS and Windows | — |
-| [Sprite sheets, animation, tilemaps](tiles.md) | **proven** | Ember Hop's Tiled levels, autotiled ground and tile colliders, packaged and played on Linux, macOS and Windows | — |
+| [Localization](localization.md) | **proven** | Coin Dash, packaged and played by the list of checks (recorded on macOS) | — |
+| [Sprite sheets, animation, tilemaps](tiles.md) | **proven** | Ember Hop's Tiled levels, autotiled ground and tile colliders, packaged and played by the list of checks (recorded on macOS) | — |
 | [2D skeletons: bones, skinned sprites and blending](skeleton2d.md) | **tested** | none | a reference game that uses it |
 | [3D: meshes, materials and the sun](3d.md) | **tested** | Shard Grove, played headless by `tests/shard_grove.rs`; its package is played headless in the list of checks | Shard Grove's frame-time baseline per GPU tier, and its web build and window played on a real GPU of each OS (#454) |
 | [Crowds: thousands of animated characters](crowds.md) | **tested** | none | a reference game that uses it |
@@ -98,20 +98,20 @@ Chapters: 21 proven, 63 tested, 7 experimental.
 | [Data files: tune without restarting](data-files.md) | **tested** | none | a reference game that uses it |
 | [Asset sources: assets that don't live in `assets/`](asset-sources.md) | **tested** | none | a reference game that uses it |
 | [Mods: what players can add and change](mods.md) | **tested** | a sample mod for Ember Hop, run by `tests/mod_sample.rs` | a shipped game that loads players' mods |
-| [Scenes and prefabs](scenes.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (Ember Hop's prefabs, title scene and world save slots) | — |
+| [Scenes and prefabs](scenes.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) (Ember Hop's prefabs, title scene and world save slots) | — |
 | [From Blender to the game](blender.md) | **tested** | Shard Grove's glTF level and characters, headless only | Shard Grove's package played on each OS |
-| [Saves and settings](storage.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (their saves and progress files, from the package) | browser storage is not part of a recorded browser run |
+| [Saves and settings](storage.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS) (their saves and progress files, from the package) | browser storage is not part of a recorded browser run |
 | [Importing from Unity](unity.md) | **tested** | none | a game built from an imported project |
 | [Changing code while the game runs](hot-patching.md) | **experimental** | none | a patch applied by `dx` in the list of checks |
-| [Headless runs and testing](headless.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows, headless from their packages | — |
+| [Headless runs and testing](headless.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS), headless from their packages | — |
 | [When something fails: reading the message](errors.md) | **tested** | none | a reference game that uses it |
-| [A complete game, packaged](packaging.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows; Shard Grove packages, but its package is not played | — |
+| [A complete game, packaged](packaging.md) | **proven** | Coin Dash and Ember Hop, packaged and played by the list of checks (recorded on macOS); Shard Grove packages, but its package is not played | — |
 | [Shipping on Steam](steam.md) | **tested** | none | a recorded run against a real Steam client, and a released game that uses it |
 | [Crash reports](crash-reports.md) | **tested** | none | a reference game that uses it |
-| [Ember Hop: a platformer, start to finish](ember-hop.md) | **proven** | Ember Hop itself, packaged and played on Linux, macOS and Windows | — |
+| [Ember Hop: a platformer, start to finish](ember-hop.md) | **proven** | Ember Hop itself, packaged and played by the list of checks (recorded on macOS) | — |
 | [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | a frame-time baseline per GPU tier, and the game opened in a visible WebGPU browser and in a window on each OS (#454) |
 | [Legions: 100,000 units that replay bit for bit](legions.md) | **tested** | Legions, a showcase rather than a reference game | a reference game that uses it |
-| [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU on Windows and Linux GPUs in a recorded run, and Firefox (its headless build has no WebGL2) |
+| [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU on Windows and Linux GPUs in a recorded run, and Firefox beyond the 2D and 3D smoke builds on a Mac's GPU (headless Firefox on a machine without a GPU has no WebGL2) |
 | [iOS: games on iPhone and iPad](ios.md) | **experimental** | none (the phone check, `examples/phone.rs`, is a test app) | a run on a device (touch, typing, interruptions, the silent switch, memory warnings, performance and power), signing, and the App Store |
 | [Android: games on phones and tablets](android.md) | **experimental** | none (the phone check, `examples/phone.rs`, is a test app; Coin Dash and the project template are packaged and started by the check) | a run on a phone (touch with fingers, multi-touch, calls, memory pressure, performance, heat and power), an upload to Google Play |
 | [Threads on the web](web-threads.md) | **experimental** | none | the chapter calls it experimental; the thread-heaps build has not run in a browser since its last fix |

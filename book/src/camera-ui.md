@@ -1,7 +1,7 @@
 # Camera, text and UI
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows (Ember Hop's following camera, both
+> and played by the list of checks (recorded on macOS) (Ember Hop's following camera, both
 > games' text). Tests: `tests/camera_rigs.rs`, `tests/ui.rs`,
 > `text_shaping_render_test.rs`. Platforms: Linux, macOS and Windows, headless
 > (the workspace tests in the list of checks). Graphics: the packaged games

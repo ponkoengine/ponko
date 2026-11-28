@@ -3,35 +3,9 @@
 > **Maturity: not a feature.** Setup steps; the features it uses carry their
 > own levels.
 
-You need a recent stable Rust (`rustup update stable`). On Linux, also the
+You need Rust 1.95 or newer (`rustup update stable`). On Linux, also the
 headers for sound and gamepads: `sudo apt-get install libasound2-dev libudev-dev`
 (Debian, Ubuntu).
-
-## Run the examples
-
-Clone the repository and run any example:
-
-```sh
-git clone https://github.com/ponkoengine/ponko
-cd ponko
-cargo run --release --example boids
-```
-
-| Example | What it shows |
-|---|---|
-| `window` | The smallest game: a window, input, one sprite |
-| `sprites` | Drawing many sprites with tint, rotation and scale |
-| `ecs` | Entities, components and systems, with sim controls |
-| `bunnymark` / `bunnymark_ecs` | Sprite throughput, immediate mode vs ECS |
-| `boids` | Flocking with a spatial grid on all cores |
-| `ants` | Ant colonies: pheromone trails, foraging, growth; up to millions of ants |
-| `headless` | A million agents with no window or GPU |
-| `coin_dash` | A small complete game (title, settings with UI scale and rebinding, rounds, pause, saved progress, sound), tested headlessly, packaged for the desktop and built for the web; see [A complete game, packaged](packaging.md) and [Headless runs and testing](headless.md#a-complete-game-tested-headlessly) |
-| `examples/cpp/coin_dash/` | Coin Dash in C++, with the Rust game's scenario tests (see [C and C++](c-cpp.md#a-complete-game-coin-dash-in-c)) |
-| `examples/cpp/boids.cpp` | The boids example in C++ (build with CMake, see [C and C++](c-cpp.md)) |
-
-Always use `--release` for anything with many entities; debug builds are
-10–50× slower.
 
 ## A new project
 
@@ -39,7 +13,7 @@ The `ponko` command makes a project that builds, tests and can be driven by
 an AI agent as it is:
 
 ```sh
-cargo install ponko_cli
+cargo install ponko_cli --version 0.2.0-rc.1
 ponko new my_game        # a 2D game; --3d for a 3D game, --headless for a simulation
 cd my_game
 cargo test               # headless tests: no window, no GPU
@@ -49,10 +23,10 @@ ponko textures           # GPU-compressed .ktx2 textures from your images (see D
 ponko cook               # runtime-ready assets under the same names (package does it for you)
 ```
 
-`ponko_cli` is new in 0.2. Until 0.2.0 is out, Cargo installs its release
-candidate only when asked for by version: `cargo install ponko_cli --version
-0.2.0-rc.1` (or the newest from the repository: `cargo install ponko_cli --git
-https://github.com/ponkoengine/ponko`).
+`ponko_cli` is new in 0.2. Until 0.2.0 is released, Cargo installs its
+release candidate only when the command names its version, as above; plain
+`cargo install ponko_cli` finds no version yet. The newest from the
+repository: `cargo install ponko_cli --git https://github.com/ponkoengine/ponko`.
 [The `ponko` command](cli.md) lists every command and option.
 
 | Template | Engine features | What's in it |
@@ -72,7 +46,7 @@ Each project has:
 - `assets/` with a `settings.json` of numbers to tune, which a debug build
   reloads when you save it ([Data files](data-files.md));
 - `.mcp.json`, which registers [`ponko-mcp`](agents.md) for your coding agent
-  (`cargo install ponko_mcp` once), and `AGENTS.md` (`CLAUDE.md` points at it)
+  (`cargo install ponko_mcp --version 0.2.0-rc.1` once), and `AGENTS.md` (`CLAUDE.md` points at it)
   with the commands, the layout and a pointer to [the agents chapter](agents.md).
 
 To build a whole game from here, step by step, follow [Tutorial: a first 2D
@@ -124,10 +98,11 @@ To start by hand instead, add the engine to a new project from crates.io:
 
 ```sh
 cargo new my_game && cd my_game
-cargo add ponko
+cargo add ponko@0.2.0-rc.1
 ```
 
-In `Cargo.toml` that is:
+Until 0.2.0 is released, plain `cargo add ponko` gives 0.1.0, which this guide
+doesn't describe. In `Cargo.toml` the command above writes:
 
 ```toml
 [dependencies]
@@ -181,6 +156,19 @@ fn main() {
 </div>
 </div>
 
+The game draws `crab.png`, which the engine looks for in an `assets/` folder
+next to `Cargo.toml`. Save any PNG there under that name before `cargo run`,
+for example the one in the engine's repository:
+
+```sh
+mkdir -p assets
+curl -L -o assets/crab.png https://raw.githubusercontent.com/ponkoengine/ponko/main/assets/crab.png
+```
+
+Without the file, `load_texture` stops the game at start with an error that
+the asset was not found. A project from `ponko new` (above) needs no
+picture: its square is drawn in code.
+
 `setup` runs once and returns a closure that runs every frame. In C++, the
 per-frame code is a frame `system` and the state lives in variables it
 captures. Variables you
@@ -192,6 +180,32 @@ Everything here comes in with `use ponko::prelude::*;`: `Game`, `Ctx`,
 `Vec2`, `Color`, `Key`, the ECS types and the common components. Add
 `use ponko::d2::*;` or `use ponko::d3::*;` for one dimension's names
 ([Naming and compatibility](naming.md)).
+
+## Run the examples
+
+Clone the repository and run any example:
+
+```sh
+git clone https://github.com/ponkoengine/ponko
+cd ponko
+cargo run --release --example boids
+```
+
+| Example | What it shows |
+|---|---|
+| `window` | The smallest game: a window, input, one sprite |
+| `sprites` | Drawing many sprites with tint, rotation and scale |
+| `ecs` | Entities, components and systems, with sim controls |
+| `bunnymark` / `bunnymark_ecs` | Sprite throughput, immediate mode vs ECS |
+| `boids` | Flocking with a spatial grid on all cores |
+| `ants` | Ant colonies: pheromone trails, foraging, growth; up to millions of ants |
+| `headless` | A million agents with no window or GPU |
+| `coin_dash` | A small complete game (title, settings with UI scale and rebinding, rounds, pause, saved progress, sound), tested headlessly, packaged for the desktop and built for the web; see [A complete game, packaged](packaging.md) and [Headless runs and testing](headless.md#a-complete-game-tested-headlessly) |
+| `examples/cpp/coin_dash/` | Coin Dash in C++, with the Rust game's scenario tests (see [C and C++](c-cpp.md#a-complete-game-coin-dash-in-c)) |
+| `examples/cpp/boids.cpp` | The boids example in C++ (build with CMake, see [C and C++](c-cpp.md)) |
+
+Always use `--release` for anything with many entities; debug builds are
+10–50× slower.
 
 ## Setup on the builder
 

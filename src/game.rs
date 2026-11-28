@@ -1,9 +1,10 @@
 //! [`Game`]: window creation and the main loop.
 //!
 //! **Maturity: proven**, from the guide chapter `systems.md`. Game: Coin Dash and Ember Hop,
-//! packaged and played on Linux, macOS and Windows. Tests: `tests/system_registration.rs`,
-//! `tests/phases.rs`, `tests/schedule_barriers.rs`. Platforms: Linux, macOS and Windows, headless
-//! (the workspace tests in the list of checks). Graphics: not involved.
+//! packaged and played by the list of checks (recorded on macOS). Tests:
+//! `tests/system_registration.rs`, `tests/phases.rs`, `tests/schedule_barriers.rs`. Platforms:
+//! Linux, macOS and Windows, headless (the workspace tests in the list of checks). Graphics: not
+//! involved.
 #![deny(missing_docs)]
 
 use std::time::Duration;

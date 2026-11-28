@@ -378,9 +378,9 @@ mod web_alloc;
 /// and archetypes. Games normally need only the ECS types in the prelude.
 ///
 /// **Maturity: proven**, from the guide chapter `ecs.md`. Game: Coin Dash and Ember Hop, packaged
-/// and played on Linux, macOS and Windows. Tests: `crates/ponko_ecs/tests`, and its unsafe code
-/// under Miri. Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of
-/// checks). Graphics: not involved.
+/// and played by the list of checks (recorded on macOS). Tests: `crates/ponko_ecs/tests`, and its
+/// unsafe code under Miri. Platforms: Linux, macOS and Windows, headless (the workspace tests in
+/// the list of checks). Graphics: not involved.
 pub mod ecs_core {
     #[doc(no_inline)]
     pub use ponko_ecs::*;

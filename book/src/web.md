@@ -6,7 +6,8 @@
 > Graphics: WebGL2 in both browsers; WebGPU and WebGL2 on a real GPU in the
 > local check run's `web-gpu` job (headless Chromium on macOS, Metal).
 > Missing: WebGPU on Windows and Linux GPUs in a recorded run, and Firefox
-> (its headless build has no WebGL2).
+> beyond the 2D and 3D smoke builds on a Mac's GPU (headless Firefox on a
+> machine without a GPU has no WebGL2).
 
 The same game code runs in a browser tab. **Try it:** the examples build
 into a gallery (below), with a page for each: what it shows, its controls,
@@ -82,8 +83,10 @@ python3 -m http.server -d target/web/gallery 8000
 
 A demo marked `"webgpu": "required"` there needs WebGPU; on a browser without
 it, its page says so and what to try instead of starting it. The others run
-with WebGPU or, where the browser lacks it, WebGL2. Each release builds the
-gallery for its version and publishes it (CONTRIBUTING.md, "Releasing"). Adding an example is one line in
+with WebGPU or, where the browser lacks it, WebGL2. The release steps build
+the gallery for the release's version to publish it (CONTRIBUTING.md,
+"Releasing"); no hosted gallery is online yet, so build it locally as above.
+Adding an example is one line in
 `examples.json`; the gallery's
 [README](../../web/gallery/README.md)
 has the fields, and how to check every page in a headless browser.

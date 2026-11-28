@@ -1,7 +1,7 @@
 # Scenes and prefabs
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows (Ember Hop's prefabs, title scene and
+> and played by the list of checks (recorded on macOS) (Ember Hop's prefabs, title scene and
 > world save slots). Tests: `tests/scenes.rs`, `tests/scene_lifecycle.rs`,
 > `tests/save_compat.rs`, `tests/prefab_compat.rs`. Platforms: Linux, macOS
 > and Windows, headless (the workspace tests in the list of checks). Graphics:

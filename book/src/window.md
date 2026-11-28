@@ -1,7 +1,7 @@
 # Window service
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows, in a window. Tests:
+> and played by the list of checks (recorded on macOS), in a window. Tests:
 > `tests/window_service.rs`. Platforms: Linux, macOS and Windows, headless
 > (the workspace tests in the list of checks); the packaged games also open a
 > real window on each. Graphics: the packaged games run in a window on Linux

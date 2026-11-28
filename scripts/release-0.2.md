@@ -154,6 +154,10 @@ For `0.2.0` (not a candidate) publish the web gallery to `gh-pages`
 - A regression is fixed on `main` through a pull request with its fragment,
   and `rc.2` follows from step 1 (the next fold adds to the same migration
   chapter).
+- At a new candidate or at `0.2.0`, change the install commands that name the
+  candidate, which `bump` leaves alone: `git grep -n -e '@0.2.0-rc' -e
+  '--version 0.2.0-rc' -- README.md book/src`. For `0.2.0`, drop the version
+  from them and the "until 0.2.0 is released" sentences next to them.
 - No regression after a week: `0.2.0` is the last candidate with its version
   changed. Step 1 with `V=0.2.0` (the fold has nothing new; `bump`, the
   section rename and `--notes 0.2.0`), then steps 2 and 3 without

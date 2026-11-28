@@ -32,16 +32,18 @@ Install the `ponko` command and make a 2D project
 ([Getting started](getting-started.md#a-new-project) has the details):
 
 ```sh
-cargo install ponko_cli
+cargo install ponko_cli --version 0.2.0-rc.1
 ponko new crab_cove
 cd crab_cove
 cargo run
 ```
 
 A window opens with an orange square you can move with the arrow keys.
-This tutorial needs Ponko 0.2; until it's released, make the project with
-`ponko new crab_cove --git https://github.com/ponkoengine/ponko`, which
-depends on the engine's `main` branch.
+This tutorial needs Ponko 0.2. Until 0.2.0 is released, the install command
+names the release candidate (plain `cargo install ponko_cli` finds no
+version yet), and the project depends on it. For the engine's `main` branch
+instead, make the project with
+`ponko new crab_cove --git https://github.com/ponkoengine/ponko`.
 
 The crab falls and collides, so turn on 2D physics in `Cargo.toml`:
 

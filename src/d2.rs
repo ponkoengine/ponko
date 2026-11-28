@@ -1,7 +1,7 @@
 //! Two-dimensional game types. Pair with `ponko::prelude::*`.
 //!
 //! **Maturity: proven**, from the guide chapter `drawing.md`. Game: Coin Dash and Ember Hop,
-//! packaged and played on Linux, macOS and Windows. Tests: the 2D render tests
+//! packaged and played by the list of checks (recorded on macOS). Tests: the 2D render tests
 //! (`draw_order_render_test.rs`, `views2d_render_test.rs`, `atlas_render_test.rs`, ...). Platforms:
 //! Linux, macOS and Windows, headless (the workspace tests in the list of checks). Graphics: the
 //! packaged games run in a window on Linux (software Vulkan under Xvfb), macOS and Windows (DirectX

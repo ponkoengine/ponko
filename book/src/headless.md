@@ -1,7 +1,7 @@
 # Headless runs and testing
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows, headless from their packages. Tests:
+> and played by the list of checks (recorded on macOS), headless from their packages. Tests:
 > `tests/headless.rs`, `tests/headless_frames.rs`, `tests/input_scenario.rs`.
 > Platforms: Linux, macOS and Windows, headless (the workspace tests in the
 > list of checks). Graphics: not involved.
@@ -339,6 +339,44 @@ C: `ponko_ctx_feed_mouse_move`, `ponko_ctx_feed_mouse_wheel`,
 `input_event::mouse_move` and `input_event::wheel`, `ctx::sounds_started()`
 and `ctx::quit_requested()`. The [cookbook](cookbook/index.md)'s click,
 sound and quit recipes are tested this way.
+
+## A million entities, no window
+
+The same API scales. This program moves one million entities for 600 fixed
+ticks, with the query spread over all cores (shown in Rust only):
+
+```rust
+use ponko::prelude::*;
+
+#[derive(Component)]
+struct Velocity(Vec2);
+
+fn movement(ctx: &mut Ctx) {
+    let dt = ctx.time.dt();
+    ctx.world.query::<(&mut d2::Transform, &Velocity)>()
+        .par_for_each(|(transform, velocity)| transform.position += velocity.0 * dt);
+}
+
+fn main() {
+    let world = Game::new("Simulation", 1, 1)
+        .sim_system(movement)
+        .setup(|ctx| {
+            ctx.world.spawn_batch((0..1_000_000).map(|i| (
+                d2::Transform::at(vec2(i as f32, 0.0)),
+                Velocity(vec2(1.0, 0.0)),
+            )));
+        })
+        .run_headless(600);
+    assert_eq!(world.len(), 1_000_000);
+}
+```
+
+Running headless doesn't remove compiled dependencies: for that, turn the
+default features off (below). Systems that declare their access can also run
+in parallel with each other ([Parallel systems](parallel-systems.md));
+`&mut Ctx` systems like this one run one after another. Whether two runs give
+the same result depends on the game code, the build and the math and physics
+settings: see [the determinism contract](../../STABILITY.md#determinism).
 
 ## Builds without a window
 

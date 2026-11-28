@@ -1,7 +1,7 @@
 # A complete game, packaged
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows; Shard Grove packages, but its
+> and played by the list of checks (recorded on macOS); Shard Grove packages, but its
 > package is not played. Tests: `scripts/package-coin-dash.py selftest` and
 > the package smoke runs. Platforms: Linux, macOS and Windows (the
 > `package-smoke` job). Graphics: the packaged games run in a window on Linux
@@ -26,7 +26,8 @@ the command that packages any game.
 ## Packaging any game: `ponko package`
 
 `ponko package` turns a game into what players download, with one command in
-the game's folder (`cargo install ponko_cli` gives the `ponko` command; in the
+the game's folder (`cargo install ponko_cli --version 0.2.0-rc.1` gives the `ponko` command
+until 0.2.0 is released; in the
 engine's repository, `cargo run -p ponko_cli -- package` runs it):
 
 ```sh

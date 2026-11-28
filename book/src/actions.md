@@ -1,7 +1,7 @@
 # Named input actions
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows (Coin Dash rebinds its controls).
+> and played by the list of checks (recorded on macOS) (Coin Dash rebinds its controls).
 > Tests: `tests/actions.rs`, `tests/action_ids.rs`, `tests/input_scenario.rs`.
 > Platforms: Linux, macOS and Windows, headless (the workspace tests in the
 > list of checks). Graphics: not involved.

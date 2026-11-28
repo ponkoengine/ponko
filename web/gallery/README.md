@@ -2,9 +2,9 @@
 
 The examples that run in a browser, as one static site: an index page and a
 page per example with the demo, what it shows, its controls, whether it needs
-WebGPU, and a link to its source at the release. Each release publishes the
-gallery of its version to <https://ponkoengine.github.io/ponko/> (see
-[Publishing](#publishing)).
+WebGPU, and a link to its source at the release. The release steps publish
+the gallery of the release's version (see [Publishing](#publishing)); no
+gallery is online yet, so build and serve it locally:
 
 ```sh
 node web/gallery/build.mjs                  # every example -> target/web/gallery/

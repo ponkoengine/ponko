@@ -1,7 +1,7 @@
 # Localization
 
-> **Maturity: [proven](maturity.md).** Game: Coin Dash, packaged and played on
-> Linux, macOS and Windows. Tests: `tests/locale.rs`,
+> **Maturity: [proven](maturity.md).** Game: Coin Dash, packaged and played by
+> the list of checks (recorded on macOS). Tests: `tests/locale.rs`,
 > `tests/coin_dash_languages.rs`. Platforms: Linux, macOS and Windows,
 > headless (the workspace tests in the list of checks). Graphics: not
 > involved.
