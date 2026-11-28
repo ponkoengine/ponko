@@ -428,8 +428,7 @@ impl MipMaker {
             let at = (stride * u64::from(layer)) as usize;
             indices[at..at + 4].copy_from_slice(&layer.to_le_bytes());
         }
-        let buffer = wgpu::util::DeviceExt::create_buffer_init(
-            device,
+        let buffer = super::traffic::Counted::uploading(device, super::traffic::Upload::Uniforms).create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("array mipmap layers"),
                 contents: &indices,
