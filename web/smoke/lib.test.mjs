@@ -9,6 +9,7 @@ import {
   canvasBackendOf,
   checkEngineGpu,
   checkMinimums,
+  checkReadback,
   checkMusicBeforeClick,
   launchConfig,
   launchFailureKind,
@@ -273,6 +274,27 @@ test("minimum fields must be numbers at or above the bound", () => {
   assert.match(checkMinimums({ models_drawn: 0 }, mins), /models_drawn is 0, below the required 1/);
   assert.match(checkMinimums({}, mins), /models_drawn is undefined/);
   assert.match(checkMinimums({ models_drawn: "8" }, mins), /below the required/);
+});
+
+test("a read-back outcome is ok, pending, a logged skip when unsupported, or wrong", () => {
+  const field = "half_float_readback";
+  assert.deepEqual(checkReadback({ [field]: "ok" }, field), { status: "ok", detail: "" });
+  assert.equal(checkReadback({}, field).status, "pending");
+  assert.equal(checkReadback({ [field]: "pending" }, field).status, "pending");
+  assert.deepEqual(checkReadback({ [field]: "unsupported: no half floats here" }, field), {
+    status: "skipped",
+    detail: "no half floats here",
+  });
+  // Values that differ from the ones written are a failure, never a skip.
+  const wrong = checkReadback({ [field]: "wrong: texel 3 is [0,0,0,0]" }, field);
+  assert.equal(wrong.status, "wrong");
+  assert.match(wrong.detail, /wrong: texel 3/);
+  assert.equal(checkReadback({ [field]: "okay-ish" }, field).status, "wrong");
+});
+
+test("the 3D fixture asks for the half-float read-back check", () => {
+  assert.equal(parse("--fixture", "web_smoke_3d").readback, "half_float_readback");
+  assert.equal(parse("--fixture", "web_smoke").readback, null);
 });
 
 test("a browser without WebGPU is unsupported, with the reason, never a pass", () => {

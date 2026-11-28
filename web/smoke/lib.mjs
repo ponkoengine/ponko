@@ -94,7 +94,7 @@ export function parseMin(spec) {
   return { field: match[1], min: Number(match[2]) };
 }
 
-const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "clicks", "query", "min", "until", "untilSeconds", "afterReload", "reloads", "persist", "editMode", "engineGpu", "music"];
+const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "clicks", "query", "min", "until", "untilSeconds", "afterReload", "reloads", "persist", "editMode", "engineGpu", "music", "readback"];
 
 /** How long `--until` waits by default: a game that plays itself through (Shard Grove's walk-through, about 40 s of play). */
 export const UNTIL_SECONDS = 180;
@@ -165,6 +165,26 @@ export function checkAfterReload(state, expects, step) {
   return null;
 }
 
+/**
+ * How far a fixture's read-back check is: the fixture publishes the outcome
+ * of reading a GPU result back on the CPU in one state field, as `pending`
+ * (not answered yet), `ok`, `unsupported: <why>` (the engine answered that
+ * this browser's GPU can't read it back, `ErrorKind::Unsupported`) or
+ * `wrong: <what>` (it read values that are not the ones written). Returns
+ * `{ status, detail }` with `status` one of `ok`, `pending`, `skipped` (the
+ * only way an unsupported read passes, and the run logs it as a skip) and
+ * `wrong`.
+ */
+export function checkReadback(state, field) {
+  const got = state?.[field];
+  if (got === undefined || got === "pending") return { status: "pending", detail: `${field} is ${JSON.stringify(got)}` };
+  if (got === "ok") return { status: "ok", detail: "" };
+  if (typeof got === "string" && got.startsWith("unsupported")) {
+    return { status: "skipped", detail: got.replace(/^unsupported:?\s*/, "") };
+  }
+  return { status: "wrong", detail: `${field} is ${JSON.stringify(got)}, not ok` };
+}
+
 /** Parses fixtures.json: what each example needs from the runner. */
 export function parseFixtures(text) {
   const fixtures = JSON.parse(text);
@@ -176,6 +196,9 @@ export function parseFixtures(text) {
     if (fixture.presses) fixture.presses.forEach(parsePress);
     if (fixture.clicks) fixture.clicks.forEach(parseClick);
     if (fixture.until) fixture.until.forEach((spec) => parseExpect(spec, "--until"));
+    if (fixture.readback !== undefined && !/^\w+$/.test(fixture.readback)) {
+      throw new UsageError(`fixtures.json: ${name}: "readback" is the state field that holds the read-back outcome`);
+    }
     if (fixture.untilSeconds !== undefined && !(fixture.untilSeconds > 0)) {
       throw new UsageError(`fixtures.json: ${name}: "untilSeconds" is a positive number of seconds`);
     }
@@ -284,6 +307,7 @@ export function parseArgs(argv, fixtures = {}) {
   }
   args.mins = given.mins ?? Object.entries(fixture?.min ?? {}).map(([field, min]) => ({ field, min }));
   // A play-through: fields the state must reach, given longer than a key's 10 s.
+  args.readback = fixture?.readback ?? null;
   args.until = given.until ?? (fixture?.until ?? []).map((spec) => parseExpect(spec, "--until"));
   args.untilSeconds = given.untilSeconds ?? fixture?.untilSeconds ?? UNTIL_SECONDS;
   args.engineGpu = given.engineGpu ?? (fixture?.engineGpu ? "required" : "optional");

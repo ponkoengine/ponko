@@ -13,6 +13,7 @@
     "features": ["3d"],
     "asset": "models/house.glb",
     "min": { "models_drawn": 1, "triangles": 100 },
+    "readback": "half_float_readback",
     "engineGpu": true
   },
   "coin_dash": {
