@@ -24,9 +24,9 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
-  # Words from private projects that use the engine must never land here.
-  # The word list is never in this repo: scripts/leak-check.sh reads it from
-  # $LEAK_WORDS or a local file. `scripts/leak-check.sh install` runs the
+  # An optional local list of words a maintainer never wants committed.
+  # The list is never in this repo: scripts/leak-check.sh reads it from
+  # $LEAK_WORDS or a local file, and skips the check without one. `scripts/leak-check.sh install` runs the
   # file check before every local commit.
   leaks:
     local-os: [Linux, macOS, Windows]

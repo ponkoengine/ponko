@@ -1,8 +1,10 @@
 #!/bin/sh
-# Fails if this public repo would carry a word from a private list (names of
-# private projects that use the engine). The list itself never lives here: it
-# comes from $LEAK_WORDS, one word per line, or the
-# file ~/.config/crabby/leak-words.txt. Without either it does nothing.
+# Fails if this public repo would carry a word from an optional local list: a
+# list of words a maintainer never wants committed. The list itself never lives
+# here: it comes from $LEAK_WORDS, one word per line, or the first of these
+# files that holds a word: ~/.config/ponko/leak-words.txt, then
+# ~/.config/crabby/leak-words.txt (the older location). Without any of them it
+# does nothing.
 #
 # Hits are reported by place only (file:line), never the text, so logs don't
 # repeat what they caught.
@@ -18,8 +20,15 @@ list=$(mktemp)
 trap 'rm -f "$list"' EXIT
 if [ -n "${LEAK_WORDS:-}" ]; then
     printf '%s\n' "$LEAK_WORDS" | sed '/^[[:space:]]*$/d' > "$list"
-elif [ -f "$HOME/.config/crabby/leak-words.txt" ]; then
-    sed '/^[[:space:]]*$/d' "$HOME/.config/crabby/leak-words.txt" > "$list"
+else
+    # The first file that holds a word wins: an empty new file never hides
+    # the old one.
+    for f in "$HOME/.config/ponko/leak-words.txt" "$HOME/.config/crabby/leak-words.txt"; do
+        if [ -f "$f" ]; then
+            sed '/^[[:space:]]*$/d' "$f" > "$list"
+            [ ! -s "$list" ] || break
+        fi
+    done
 fi
 if [ ! -s "$list" ] && [ "${1:-}" != install ]; then
     echo "leak check: no word list, skipped"
