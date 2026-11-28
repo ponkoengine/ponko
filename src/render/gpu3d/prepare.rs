@@ -992,6 +992,10 @@ impl Renderer3D {
             // A target camera clears its render target even with nothing
             // in sight, instead of leaving its last picture there.
             && frame.views.is_empty()
+            // Compute passes run in a frame with nothing else to draw
+            // (a simulation read back on the CPU, a texture for 2D).
+            && frame.computes.is_empty()
+            && frame.scene_computes.is_empty()
         {
             self.too_many = false;
             return false;

@@ -4336,6 +4336,10 @@ pub fn ponko::gfx::Graphics::unpin_resident_texture(&mut self, &str)
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::pipeline_stats(&self) -> ponko::render::PipelineStats
 impl ponko::gfx::Graphics
+pub fn ponko::gfx::Graphics::read_gpu_buffer(&mut self, ponko::render::GpuBuffer, core::ops::range::Range<u32>) -> ponko::render::Readback
+pub fn ponko::gfx::Graphics::read_render_target(&mut self, ponko::render::RenderTarget, glam::u32::uvec2::UVec2, glam::u32::uvec2::UVec2) -> ponko::render::Readback
+pub fn ponko::gfx::Graphics::readback(&mut self, ponko::render::Readback) -> core::option::Option<core::result::Result<&[glam::f32::sse2::vec4::Vec4], ponko::error::Error>>
+impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> ponko::render::RenderTarget
 pub fn ponko::gfx::Graphics::try_render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> core::result::Result<ponko::render::RenderTarget, ponko::error::Error>
 impl ponko::gfx::Graphics
@@ -12522,6 +12526,18 @@ pub fn ponko::render::QualityChange::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::marker::Copy for ponko::render::QualityChange
 impl serde_core::ser::Serialize for ponko::render::QualityChange
 pub fn ponko::render::QualityChange::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+#[repr(C)] pub struct ponko::render::Readback
+impl core::clone::Clone for ponko::render::Readback
+pub fn ponko::render::Readback::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::Readback
+impl core::cmp::PartialEq for ponko::render::Readback
+pub fn ponko::render::Readback::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::Readback
+pub fn ponko::render::Readback::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::render::Readback
+pub fn ponko::render::Readback::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::render::Readback
+impl core::marker::StructuralPartialEq for ponko::render::Readback
 #[repr(C)] pub struct ponko::render::ReceivesDecals(pub u32)
 impl ponko::render::ReceivesDecals
 pub const ponko::render::ReceivesDecals::ALL: Self

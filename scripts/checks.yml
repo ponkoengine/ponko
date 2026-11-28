@@ -1799,6 +1799,11 @@ jobs:
               --require-gpu --out "target/web-smoke/gpu-$fixture-webgpu" || status=1
           done
           exit $status
+      # The 3D fixture also reads a half-float (`Rgba16Float`) render target
+      # back on the CPU and checks its values (`readback` in
+      # web/smoke/fixtures.json). A browser that can't read it back makes the
+      # engine answer `ErrorKind::Unsupported`; the run then passes only as a
+      # skip logged as `SKIPPED` and recorded in report.json, never silently.
       - name: Chromium, WebGL2 on the GPU (3D fixture, new headless mode)
         timeout-minutes: 5
         if: ${{ !cancelled() }}

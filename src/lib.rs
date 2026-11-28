@@ -248,6 +248,22 @@ pub mod __ffi {
         crate::render::RenderTarget::from_texture(texture)
     }
 
+    /// The id inside a [`Readback`](crate::render::Readback). Unstable.
+    #[cfg(feature = "3d")]
+    #[must_use]
+    pub fn readback_id(read: crate::render::Readback) -> u32 {
+        read.id
+    }
+
+    /// A [`Readback`](crate::render::Readback) from an id from
+    /// [`readback_id`]; one the game didn't make reads as used up.
+    /// Unstable.
+    #[cfg(feature = "3d")]
+    #[must_use]
+    pub fn readback(id: u32) -> crate::render::Readback {
+        crate::render::Readback { id }
+    }
+
     /// The slot bits of a mesh's, GPU buffer's or collision mesh's id: the
     /// bits above count how often the slot was given out. Unstable.
     #[cfg(feature = "3d")]

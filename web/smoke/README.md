@@ -26,6 +26,15 @@ order:
    `AudioContext` and `AudioBufferSourceNode.start` to see this.
 5. **State minimums** (`--min`): fields the fixture must report at least
    (the 3D fixture's models and triangles drawn).
+   **GPU read-back** (the fixture's `readback` field, the 3D fixture's
+   `half_float_readback`): a compute pass writes known values into a
+   half-float (`Rgba16Float`) render target, the game reads it back on the
+   CPU (`Graphics::read_render_target`) and publishes `ok` when the texels
+   are the ones written. A browser whose GPU can't read it back must say so:
+   the engine answers `ErrorKind::Unsupported`, the game publishes
+   `unsupported: <why>`, and the run passes only as a skip, logged as
+   `SKIPPED` and recorded in `report.json` (`readback`). Other values
+   fail the run.
    **Play-through** (`--until <field>:<value>`, `--until-timeout <s>`,
    default 180 s): a game that plays itself must reach these fields in
    that time, still running, with no failure on the way (Shard Grove's

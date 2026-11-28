@@ -569,6 +569,12 @@ What gives the same world from the same seed and inputs:
 - `Game::parallel_systems` doesn't change any of this: a simulation gives
   the same world with it on or off and on any number of threads, so
   lockstep peers may differ in that setting.
+- Values read back from the GPU (`Graphics::read_gpu_buffer`,
+  `read_render_target`, `readback`) are not deterministic: GPU floating
+  point differs between adapters and drivers, and the frame an answer
+  arrives on varies with the GPU's load. They must not feed a
+  `sim_system`, replays, rollback or lockstep networking; use them for
+  presentation and single-player rules only.
 - Entity ids are part of that world, also the ones `commands.spawn`
   reserves: the same spawns in the same order get the same ids, with the
   scheduler on or off and on any number of threads. Not inside a parallel

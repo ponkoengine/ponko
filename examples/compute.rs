@@ -4,8 +4,9 @@
 //!
 //!   `cargo run --release --example compute --features 3d`
 //!
-//! Click the water to drop a stone in. `SHOT=path.png` saves frame 120
-//! and quits.
+//! Click the water to drop a stone in. The height of the water at the
+//! pond's centre is read back on the CPU (a few frames late) and shown.
+//! `SHOT=path.png` saves frame 120 and quits.
 
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
@@ -52,6 +53,7 @@ fn main() {
         (seed >> 8) as f32 / (1 << 24) as f32
     };
     let mut next_drop = 0.0;
+    let (mut probe, mut centre) = (None, 0.0);
     Game::new("Ponko: compute", 1280, 720)
         .system(move |ctx: &mut Ctx| {
             if ctx.input.key_pressed(Key::Escape) {
@@ -78,6 +80,20 @@ fn main() {
             ctx.gfx.update_material(
                 drops,
                 MaterialDesc::default().with_custom([drop, Vec4::ZERO, Vec4::ZERO, Vec4::ZERO]),
+            );
+            // One texel read back at a time: asked, then answered a few
+            // frames later (never in headless runs, which have no GPU).
+            let read =
+                *probe.get_or_insert_with(|| ctx.gfx.read_render_target(pass.target, uvec2(256, 256), uvec2(1, 1)));
+            if let Some(answer) = ctx.gfx.readback(read) {
+                centre = answer.map_or(centre, |texels| texels[0].x);
+                probe = None;
+            }
+            ctx.gfx.draw_text(
+                &format!("height at the centre: {centre:+.3}"),
+                vec2(16.0, 16.0),
+                24.0,
+                Color::WHITE,
             );
             if ctx.time.frame() == 120
                 && let Ok(path) = std::env::var("SHOT")

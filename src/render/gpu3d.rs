@@ -1429,6 +1429,12 @@ impl Renderer3D {
         self.resources.write_gpu_buffer(queue, id, offset, data);
     }
 
+    /// GPU buffer `id`'s GPU copy (its live elements first); `None` on a
+    /// GPU without storage buffers (WebGL2) or for a freed one.
+    pub fn gpu_buffer(&self, id: u32) -> Option<&wgpu::Buffer> {
+        Some(&self.resources.storage_buffers.get(id as usize)?.as_ref()?.buffer)
+    }
+
     /// Makes GPU buffer `id` keep the elements the last frame drew, for
     /// the motion pass, or stop (see `Graphics::set_gpu_buffer_motion`).
     pub fn set_gpu_buffer_motion(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, keep: bool) {

@@ -602,6 +602,10 @@ impl Ctx {
             ),
             None => FrameStatus::Skipped,
         };
+        // After the frame's passes, drawn or not: what this frame's reads
+        // asked for (`Graphics::read_gpu_buffer`).
+        #[cfg(feature = "3d")]
+        self.gfx.submit_readbacks();
         #[cfg(feature = "3d")]
         // A frame that wasn't drawn hands its probe captures to the next one.
         self.gfx
@@ -755,6 +759,8 @@ impl Ctx {
         self.place_cameras();
         self.events.begin_frame(self.time.frame(), self.time.sim_tick());
         self.gfx.frame = self.time.frame();
+        #[cfg(feature = "3d")]
+        self.gfx.collect_readbacks();
         self.gfx.asset_ledger.now = self.time.frame();
         self.audio.ledger.now = self.time.frame();
         self.audio.forget_started();

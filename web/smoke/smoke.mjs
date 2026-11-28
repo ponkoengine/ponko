@@ -45,6 +45,7 @@ import {
   checkUntil,
   checkEngineGpu,
   checkMinimums,
+  checkReadback,
   checkMusicBeforeClick,
   launchConfig,
   launchFailureKind,
@@ -819,6 +820,32 @@ async function main() {
     snapshot = await call(smokeState(page));
     const tooLow = checkMinimums(snapshot.state, args.mins);
     if (tooLow) throw new Failure("state", tooLow);
+
+    // 4c''. A GPU result read back on the CPU (the fixture's "readback"
+    //      field): `ok` must hold. When the browser can't read it back, the
+    //      engine answers `unsupported` with its reason; that passes only as
+    //      a skip, logged loudly and recorded in the report, never as `ok`.
+    if (args.readback) {
+      step = `waiting for the read-back outcome (${args.readback})`;
+      const readbackDeadline = Date.now() + 30_000;
+      let result;
+      for (;;) {
+        snapshot = await call(smokeState(page));
+        failure = appFailure(snapshot.status);
+        if (failure) throw await settled(failure);
+        result = checkReadback(snapshot.state, args.readback);
+        if (result.status !== "pending") break;
+        if (Date.now() > readbackDeadline) throw new Failure("state", `no read-back outcome after 30 s: ${result.detail}`);
+        await sleep(200);
+      }
+      if (result.status === "wrong") throw new Failure("state", `GPU read-back: ${result.detail}`);
+      report.readback = { field: args.readback, outcome: result.status === "ok" ? "ok" : "skipped", reason: result.detail || null };
+      if (result.status === "skipped") {
+        log(`SKIPPED: the GPU read-back check: this browser's GPU can't read the target back: ${result.detail}`);
+      } else {
+        log(`GPU read-back ok (${args.readback})`);
+      }
+    }
 
     // 4c'. A play-through (--until): a game that plays itself (Shard
     //      Grove's walk-through) must reach these fields within

@@ -447,6 +447,9 @@ using crowd_clip = PonkoCrowdClip;
 /// A GPU array of four-float elements (Rust `GpuBuffer`) for compute passes, from ctx::create_gpu_buffer. A
 /// handle; free it with ctx::free_gpu_buffer.
 using gpu_buffer = PonkoGpuBuffer;
+/// A read of GPU memory back to the CPU that is under way (Rust `Readback`), from ctx::read_gpu_buffer or
+/// ctx::read_render_target and answered by ctx::readback on a later frame. A plain id.
+using readback = PonkoReadback;
 /// One compute pass run each frame (Rust `ComputePass`); see compute_pass_of.
 using compute_pass = PonkoComputePass;
 /// A screen effect shader in WGSL (ctx::load_effect, ctx::create_effect).
@@ -10214,6 +10217,40 @@ public:
     /// doubles the buffer's memory. Throws ponko::error for a freed buffer.
     void set_gpu_buffer_motion(gpu_buffer b, bool keep) {
         detail::check(ponko_ctx_set_gpu_buffer_motion(raw_, b, keep));
+    }
+    /// Asks for elements `start` to `end` (not included) of `b` back on the CPU, as they are once this
+    /// frame's compute passes ran (Rust `Graphics::read_gpu_buffer`); ctx::readback answers on a later frame,
+    /// typically one to three frames from now. GPU results are not deterministic: never feed them to
+    /// simulation systems, replays, rollback or lockstep. Throws ponko::error for a freed buffer, or an empty
+    /// range or one past its end.
+    ponko::readback read_gpu_buffer(gpu_buffer b, std::uint32_t start, std::uint32_t end) {
+        ponko::readback r{};
+        detail::check(ponko_ctx_read_gpu_buffer(raw_, b, start, end, &r));
+        return r;
+    }
+    /// Asks for the `width` x `height` texels at (`x`, `y`) of `target` back on the CPU, row by row from the
+    /// top, as linear RGBA (Rust `Graphics::read_render_target`); ctx::readback answers on a later frame.
+    /// Throws ponko::error for a texture that isn't a live render target or a rectangle past its edge.
+    ponko::readback read_render_target(ponko::render_target target, std::uint32_t x, std::uint32_t y, std::uint32_t width,
+                                       std::uint32_t height) {
+        ponko::readback r{};
+        detail::check(ponko_ctx_read_render_target(raw_, target, x, y, width, height, &r));
+        return r;
+    }
+    /// The answer to `r` (Rust `Graphics::readback`): false while the GPU works on it (always on the frame
+    /// it was asked for); true once it arrived, with `values` holding one element or texel each (its memory
+    /// reused). The answer stays for the rest of that frame. Throws ponko::error when it can't be answered
+    /// (kind unsupported: a headless run, or a GPU buffer on WebGL2) or when `r` is used up (on a frame after
+    /// it was answered).
+    bool readback(ponko::readback r, std::vector<std::array<float, 4>>& values) {
+        std::size_t len = 0;
+        bool ready = false;
+        detail::check(ponko_ctx_readback(raw_, r, nullptr, 0, &len, &ready));
+        if (!ready) return false;
+        values.resize(len);
+        detail::check(ponko_ctx_readback(raw_, r, reinterpret_cast<float (*)[4]>(values.data()), values.size(),
+                                         &len, &ready));
+        return true;
     }
     /// Saves this frame as a PNG at `path` once it is drawn. Does nothing in headless runs.
     void save_screenshot(const char* path) { detail::check(ponko_ctx_save_screenshot(raw_, path)); }
