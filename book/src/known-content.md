@@ -1,7 +1,7 @@
 # Well-known content
 
-> **Maturity: not a feature.** How the 3D loader and renderer are checked
-> against content other people made.
+<!-- Maturity: not a feature. How the 3D loader and renderer are checked
+     against content other people made. -->
 
 The offscreen GPU tests ([GPU regression tests](render-tests.md)) draw small
 scenes built for them. This chapter checks the loader and the renderer

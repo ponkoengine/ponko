@@ -1,6 +1,7 @@
 # Check results: macOS
 
-> **Maturity: not a feature.** A record of runs of the list of checks on a Mac.
+<!-- Maturity: not a feature. A record of runs of the list of checks on a Mac.
+     -->
 
 What ran of the list of checks (`scripts/checks.yml`) on macOS, when, on what,
 and what came out. Each run adds a section at the top; older runs stay below.

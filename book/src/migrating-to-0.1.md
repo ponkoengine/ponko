@@ -1,6 +1,6 @@
 # Migrating from 0.0.1 to 0.1.0
 
-> **Maturity: not a feature.** A migration guide for one release.
+<!-- Maturity: not a feature. A migration guide for one release. -->
 
 0.1.0 is the one deliberately breaking release of the rename: it removed
 every deprecated alias and forwarder, so there is one name and one path for

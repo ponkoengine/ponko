@@ -1,7 +1,7 @@
 # Ponko vs Bevy vs Unity
 
-> **Maturity: not a feature.** A comparison with other engines; the levels of
-> the features it names are on their own chapters and in the list of levels.
+<!-- Maturity: not a feature. A comparison with other engines; the levels of
+     the features it names are on their own chapters and in the list of levels. -->
 
 **Last reviewed: 2026-11-22.** Ponko was renamed before 0.1.0 (the
 [naming chapter](naming.md) maps the old names). This comparison describes

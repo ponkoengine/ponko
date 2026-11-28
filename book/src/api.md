@@ -1,6 +1,6 @@
 # API reference
 
-> **Maturity: not a feature.** Where the API reference is.
+<!-- Maturity: not a feature. Where the API reference is. -->
 
 Every public item is documented in rustdoc, most with an example. Items
 behind a cargo feature say which one ("Available on crate feature `3d`

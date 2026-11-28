@@ -1,6 +1,6 @@
 # What's new in 0.2
 
-> **Maturity: not a feature.** The release notes of one release.
+<!-- Maturity: not a feature. The release notes of one release. -->
 
 <!-- release story: written by hand, copied to CHANGELOG.md by the fold -->
 Ponko 0.2 grows the engine from "a fast 2D and 3D core" into one you can

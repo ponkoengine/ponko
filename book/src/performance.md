@@ -1,7 +1,7 @@
 # Performance and benchmarks
 
-> **Maturity: not a feature.** Benchmarks and how they were measured; the
-> features measured carry their own levels.
+<!-- Maturity: not a feature. Benchmarks and how they were measured; the
+     features measured carry their own levels. -->
 
 Numbers from a MacBook Pro (M4 Max), release builds, unless a section names
 another machine (the [scoreboard](#ponko-vs-bevy-the-scoreboard) also has a

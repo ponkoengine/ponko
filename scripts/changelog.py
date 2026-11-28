@@ -465,7 +465,7 @@ def chapter_text(version, groups):
     return '\n'.join([
         f'# {chapter_title(version)}',
         '',
-        '> **Maturity: not a feature.** A migration guide for one release.',
+        '<!-- Maturity: not a feature. A migration guide for one release. -->',
         '',
         f'Ponko {chapter_stem(version)} breaks the API in the ways listed here, grouped by area. Each '
         'entry says what changed, what to write instead, and shows the code before and after. The '
@@ -652,7 +652,7 @@ def release_page(version, existing, generated):
     if existing is None:
         existing = '\n'.join([
             f'# {release_page_title(version)}', '',
-            '> **Maturity: not a feature.** The release notes of one release.', '', STORY_START,
+            '<!-- Maturity: not a feature. The release notes of one release. -->', '', STORY_START,
             f'Ponko {chapter_stem(version)} is ... (one paragraph: what the release is about, for a '
             'game developer), then **Highlights**: one bullet per area that matters, each linking '
             'its guide chapter.', STORY_END, '', NOTES_START, NOTES_END, ''])
@@ -1036,7 +1036,7 @@ def selftest():
                      '  Instead: wrap the argument, `Baz::new(x)`.', '  It keeps the old meaning.']
     # The chapter form has everything, grouped by area.
     chapter = chapter_text('0.2.0', [('Rendering', found[1:]), ('ECS and systems', found[:1])])
-    assert chapter.startswith('# Migrating from 0.1 to 0.2\n\n> **Maturity: not a feature.**'), \
+    assert chapter.startswith('# Migrating from 0.1 to 0.2\n\n<!-- Maturity: not a feature.'), \
         'every chapter in SUMMARY.md says its maturity (scripts/maturity.py)'
     assert '### `Foo::bar` takes a `Baz` now\n' in chapter and '### `Qux` is gone\n' in chapter
     assert chapter.index('## ECS and systems') < chapter.index('`Foo::bar` takes') \
@@ -1138,7 +1138,7 @@ def selftest():
             assert 'patch release' in str(error)
         # The release page: a new one has an empty story; --notes fills its generated part.
         page = notes(tmp, '0.2.0', False)
-        assert page.startswith("# What's new in 0.2\n\n> **Maturity: not a feature.**") and STORY_START in page
+        assert page.startswith("# What's new in 0.2\n\n<!-- Maturity: not a feature.") and STORY_START in page
         assert '## Breaking changes at a glance' in page and '- `Qux` is gone' in page
         assert 'migrating-to-0.2.md#' not in page, 'no links before the fold writes the chapter'
         assert '| **All** | **2** | **1** | **1** |' in page, page

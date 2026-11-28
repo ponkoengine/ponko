@@ -1,6 +1,6 @@
 # Contributing
 
-> **Maturity: not a feature.** How to contribute.
+<!-- Maturity: not a feature. How to contribute. -->
 
 Start with [`CONTRIBUTING.md`](../../CONTRIBUTING.md): your first change in
 four steps, which checks a change needs, how to claim an issue and how fast
@@ -427,9 +427,11 @@ level. A new chapter starts like this:
 ```
 
 Claim only what the repository records, and choose the lower level when in
-doubt. A page that describes no feature says `**Maturity: not a feature.**`
-and why. The [list of levels](maturity.md) is generated, and so are the
-module paragraphs that name a chapter:
+doubt. A page that describes no feature (an index, a tutorial, a migration
+guide) says so and why in a comment in the same place, which readers don't
+see: `<!-- Maturity: not a feature. A migration guide for one release. -->`.
+The [list of levels](maturity.md) is generated, and so are the module
+paragraphs that name a chapter:
 
 ```sh
 python3 scripts/maturity.py           # fails for a chapter or module without a level

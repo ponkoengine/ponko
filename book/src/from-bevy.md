@@ -1,7 +1,7 @@
 # Coming from Bevy
 
-> **Maturity: not a feature.** A translation table for Bevy users; the
-> features it maps to carry their own levels.
+<!-- Maturity: not a feature. A translation table for Bevy users; the features
+     it maps to carry their own levels. -->
 
 This chapter is for people who know [Bevy](https://bevy.org) and want to
 write the same game in Ponko. It maps Bevy's concepts to Ponko's, shows the

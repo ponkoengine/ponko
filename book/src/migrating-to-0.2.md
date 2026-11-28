@@ -1,6 +1,6 @@
 # Migrating from 0.1 to 0.2
 
-> **Maturity: not a feature.** A migration guide for one release.
+<!-- Maturity: not a feature. A migration guide for one release. -->
 
 Ponko 0.2 breaks the API in the ways listed here, grouped by area. Each entry says what changed, what to write instead, and shows the code before and after. The compiler names most of them; look the message up below. The code after each change is compiled by the guide's checks, so it builds as shown.
 

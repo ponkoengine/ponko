@@ -9,9 +9,16 @@ with its maturity level and what the level rests on:
     > involved. Missing: a reference game that uses it.
 
 The level is proven, tested or experimental (STABILITY.md, "Maturity levels",
-defines them); a page that describes no feature of its own says
-`**Maturity: not a feature.**` and why. Game, Platforms and Graphics are
-required for a level, Missing is optional. The quote may span lines.
+defines them). Game, Platforms and Graphics are required for a level, Missing
+is optional. The quote may span lines.
+
+A page that describes no feature of its own (the introduction, a tutorial
+index, a migration guide) says so and why in an HTML comment in the same
+place, so the reader doesn't see a banner that has nothing to rate:
+
+    <!-- Maturity: not a feature. A migration guide for one release. -->
+
+The comment may span lines.
 
 Every public top-level module of the engine (`pub mod` in src/lib.rs, except
 the hidden ones and the prelude) says the same in its rustdoc, as the
@@ -49,6 +56,7 @@ FIELDS = ("Game:", "Platforms:", "Graphics:")
 SKIP_MODULES = {"prelude", "stream", "physics3d", "bench_sharing", "__ffi", "__fuzz"}
 
 CHAPTER_START = re.compile(r"^> \*\*Maturity: (?:\[([a-z ]+)\]\([^)]*\)|([a-z ]+))\.\*\*\s*(.*)$")
+NOT_A_FEATURE_START = re.compile(r"^<!-- Maturity: not a feature\.\s*(.*)$")
 MODULE_START = re.compile(
     r"^\*\*Maturity: ([a-z]+)\*\*, (?:from the guide chapter `([^`]+)`|no guide chapter)\.\s*(.*)$"
 )
@@ -76,10 +84,18 @@ def parse_chapter(text):
         rest.pop(0)
     if not rest:
         raise Problem("nothing under the title")
+    comment = NOT_A_FEATURE_START.match(rest[0])
+    if comment:
+        return NOT_A_FEATURE, not_a_feature_reason(comment.group(1), rest[1:])
     match = CHAPTER_START.match(rest[0])
     if not match:
-        raise Problem("the first lines under the title must be `> **Maturity: <level>.** ...`")
+        raise Problem(
+            "the first lines under the title must be `> **Maturity: <level>.** ...`, "
+            "or `<!-- Maturity: not a feature. <why> -->` for a page that describes no feature"
+        )
     level = match.group(1) or match.group(2)
+    if level == NOT_A_FEATURE:
+        raise Problem("write `not a feature` as a comment, `<!-- Maturity: not a feature. <why> -->`, not as a banner")
     words = [match.group(3)]
     for line in rest[1:]:
         if not line.startswith(">"):
@@ -88,6 +104,21 @@ def parse_chapter(text):
     body = " ".join(w for w in words if w)
     check_level(level, body, allow_not_a_feature=True)
     return level, body
+
+
+def not_a_feature_reason(first, more):
+    """The reason in a `<!-- Maturity: not a feature. ... -->` comment that starts with `first`."""
+    words = []
+    for line in [first] + more:
+        text = line.strip()
+        if "-->" in text:
+            words.append(text[: text.index("-->")].strip())
+            body = " ".join(w for w in words if w)
+            if not body:
+                raise Problem("`not a feature` needs a reason")
+            return body
+        words.append(text)
+    raise Problem("the `<!-- Maturity: not a feature.` comment never ends with `-->`")
 
 
 def check_level(level, body, allow_not_a_feature=False):
@@ -353,12 +384,15 @@ def selftest():
     assert parse_chapter(good) == ("tested", "Game: none. Tests: x. Platforms: Linux. Graphics: not involved.")
     plain = "```sh\n# not a title\n```\n# Real\n> **Maturity: proven.** Game: a. Platforms: b. Graphics: c.\n"
     assert parse_chapter(plain)[0] == "proven"
-    assert parse_chapter("# T\n\n> **Maturity: not a feature.** An index.\n")[0] == NOT_A_FEATURE
+    assert parse_chapter("# T\n\n<!-- Maturity: not a feature. An index. -->\n") == (NOT_A_FEATURE, "An index.")
+    assert parse_chapter("# T\n\n<!-- Maturity: not a feature. An\n     index. -->\n\nText\n") == (NOT_A_FEATURE, "An index.")
     for bad, message in [
         ("# T\n\nText first.\n", "must be"),
         ("# T\n\n> **Maturity: solid.** Game: a. Platforms: b. Graphics: c.\n", "unknown level"),
         ("# T\n\n> **Maturity: tested.** Game: a. Platforms: b.\n", "Graphics:"),
-        ("# T\n\n> **Maturity: not a feature.**\n", "needs a reason"),
+        ("# T\n\n<!-- Maturity: not a feature. -->\n", "needs a reason"),
+        ("# T\n\n<!-- Maturity: not a feature. An index.\n\nText\n", "never ends"),
+        ("# T\n\n> **Maturity: not a feature.** An index.\n", "as a comment"),
         ("# T\n\n> **Maturity: tested.** Game: [a](b.md). Platforms: b. Graphics: c.\n", "links"),
         ("no title\n", "title"),
     ]:

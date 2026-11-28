@@ -1,7 +1,7 @@
 # GPU regression tests
 
-> **Maturity: not a feature.** How the GPU regression tests are written and
-> run.
+<!-- Maturity: not a feature. How the GPU regression tests are written and
+     run. -->
 
 The 3D renderer is protected by offscreen GPU tests: each draws a small,
 controlled scene into a texture, reads the pixels back and checks them. They
