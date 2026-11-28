@@ -1,7 +1,7 @@
 # Saves and settings
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows (their saves and progress files, from
+> and played by the list of checks (recorded on macOS) (their saves and progress files, from
 > the package). Tests: `tests/storage.rs`. Platforms: Linux, macOS and
 > Windows, headless (the workspace tests in the list of checks). Graphics: not
 > involved. Missing: browser storage is not part of a recorded browser run.

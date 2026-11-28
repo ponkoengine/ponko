@@ -1169,8 +1169,8 @@ How to read it:
 
 - **Bevy is faster at skinned characters on Vulkan**: 8.35 ms against
   8.72 ms, and the ranges don't overlap. On DirectX 12 Ponko is faster
-  (9.65 ms against 15.5 ms). On the M4 Max Bevy was faster too. The
-  workload is tracked in #488.
+  (9.65 ms against 15.5 ms), and so it is on the M4 Max (2.38 against
+  3.83 ms). The workload is tracked in #488.
 - **Bevy failed the tinted sprites on DirectX 12.** All three runs ended
   with `DeviceLost: Out of memory` from Bevy's renderer: a material for each
   of 100k sprites. The same program runs on Vulkan (90.3 ms).

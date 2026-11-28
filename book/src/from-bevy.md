@@ -583,14 +583,15 @@ systems do not run headless, which is why game logic belongs in
 
 ## What is missing or slower
 
-Measured against Bevy 0.20.1 on one machine
+Measured against Bevy 0.20.1
 ([the scoreboard](performance.md#ponko-vs-bevy-the-scoreboard)), Ponko is
-faster on every run-time row but one, in both tables:
+faster on every run-time row of both tables on an Apple M4 Max, and on every
+row but one on a Windows desktop:
 
-- **Skinned characters are slower.** 1,000 characters of 16 joints with a
-  sun shadow take 6.06 ms a frame in Ponko and 3.86 ms in Bevy as a project
-  starts (0.64×), and 6.06 against 3.12 ms with both engines tuned (0.51×).
-  Issue #241 tracks it.
+- **Skinned characters are slower on Vulkan.** On the Windows desktop with
+  Vulkan, 1,000 characters of 16 joints with a sun shadow take 8.72 ms a
+  frame in Ponko and 8.35 ms in Bevy. On DirectX 12 (9.65 against 15.5 ms)
+  and on the M4 Max (2.38 against 3.83 ms) Ponko is faster.
 - **No pipelined rendering.** Bevy simulates the next frame while it draws
   this one; a Ponko frame is the simulation and then the drawing. It is the
   main reason Bevy's GPU rows improve between the two tables

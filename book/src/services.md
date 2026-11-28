@@ -1,7 +1,7 @@
 # Ctx and its services
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows. Tests: `tests/services.rs`,
+> and played by the list of checks (recorded on macOS). Tests: `tests/services.rs`,
 > `tests/service_phases.rs`. Platforms: Linux, macOS and Windows, headless
 > (the workspace tests in the list of checks). Graphics: not involved.
 

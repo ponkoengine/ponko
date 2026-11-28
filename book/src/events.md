@@ -1,7 +1,7 @@
 # Events: messages between systems
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows. Tests: `tests/events.rs`. Platforms:
+> and played by the list of checks (recorded on macOS). Tests: `tests/events.rs`. Platforms:
 > Linux, macOS and Windows, headless (the workspace tests in the list of
 > checks). Graphics: not involved.
 

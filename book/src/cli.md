@@ -9,8 +9,12 @@
 the editor, and turns a game into what players download. Install it once:
 
 ```sh
-cargo install ponko_cli
+cargo install ponko_cli --version 0.2.0-rc.1
 ```
+
+Until 0.2.0 is released, Cargo installs a release candidate only when the
+command names its version, as above; plain `cargo install ponko_cli` finds
+no version yet.
 
 `ponko` alone, `ponko help` or `ponko --help` lists the commands;
 `ponko help <command>` or `ponko <command> --help` lists a command's

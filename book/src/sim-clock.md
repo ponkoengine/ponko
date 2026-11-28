@@ -1,7 +1,7 @@
 # The simulation clock
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows (fixed-step rules). Tests:
+> and played by the list of checks (recorded on macOS) (fixed-step rules). Tests:
 > `tests/long_session_time.rs`, `tests/step_inputs.rs`,
 > `tests/determinism.rs`. Platforms: Linux, macOS and Windows, headless (the
 > workspace tests in the list of checks). Graphics: not involved.

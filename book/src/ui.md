@@ -1,7 +1,7 @@
 # Retained game UI
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows (Coin Dash's menus and settings).
+> and played by the list of checks (recorded on macOS) (Coin Dash's menus and settings).
 > Tests: `tests/ui_retained.rs`, `tests/ui.rs`, `tests/coin_dash_menus.rs`,
 > `ui_render_test.rs`. Platforms: Linux, macOS and Windows, headless (the
 > workspace tests in the list of checks). Graphics: the packaged games run in

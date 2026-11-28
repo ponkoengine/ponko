@@ -2,9 +2,9 @@
 //! follow their parent, in 2D and 3D.
 //!
 //! **Maturity: proven**, from the guide chapter `hierarchy.md`. Game: Coin Dash and Ember Hop,
-//! packaged and played on Linux, macOS and Windows (Ember Hop's prefabs with children). Tests:
-//! `tests/hierarchy.rs`. Platforms: Linux, macOS and Windows, headless (the workspace tests in the
-//! list of checks). Graphics: not involved.
+//! packaged and played by the list of checks (recorded on macOS) (Ember Hop's prefabs with
+//! children). Tests: `tests/hierarchy.rs`. Platforms: Linux, macOS and Windows, headless (the
+//! workspace tests in the list of checks). Graphics: not involved.
 //!
 //! The link from a child to its parent is its attachment:
 //! [`Attached`] in 2D, `Attached3D` in 3D (with the

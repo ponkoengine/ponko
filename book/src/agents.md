@@ -24,7 +24,7 @@ approve it).
 For your own game, install the binary and add it to your agent:
 
 ```sh
-cargo install ponko_mcp
+cargo install ponko_mcp --version 0.2.0-rc.1   # plain `cargo install ponko_mcp` gives 0.1.0 until 0.2.0 is released
 claude mcp add ponko -- ponko-mcp            # Claude Code
 claude mcp add ponko-view -- ponko-mcp --read-only
 ```

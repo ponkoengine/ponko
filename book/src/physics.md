@@ -1,7 +1,7 @@
 # Physics: bodies that fall, stack and bounce
 
-> **Maturity: [proven](maturity.md).** Game: Ember Hop, packaged and played on
-> Linux, macOS and Windows. Tests: `tests/physics.rs`,
+> **Maturity: [proven](maturity.md).** Game: Ember Hop, packaged and played by
+> the list of checks (recorded on macOS). Tests: `tests/physics.rs`,
 > `tests/physics2d_queries.rs`, `tests/tilemap_physics.rs`; with
 > `physics-determinism` the same pile and Ember Hop's autopilot give the same
 > result on each OS. Platforms: Linux, macOS and Windows, headless (the

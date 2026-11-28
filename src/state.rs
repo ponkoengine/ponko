@@ -1,9 +1,9 @@
 //! Game states and run conditions: title, loading, playing, paused.
 //!
 //! **Maturity: proven**, from the guide chapter `states.md`. Game: Coin Dash and Ember Hop,
-//! packaged and played on Linux, macOS and Windows (title, play, pause and end screens). Tests:
-//! `tests/states.rs`. Platforms: Linux, macOS and Windows, headless (the workspace tests in the
-//! list of checks). Graphics: not involved.
+//! packaged and played by the list of checks (recorded on macOS) (title, play, pause and end
+//! screens). Tests: `tests/states.rs`. Platforms: Linux, macOS and Windows, headless (the workspace
+//! tests in the list of checks). Graphics: not involved.
 //!
 //! # Design
 //!

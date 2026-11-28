@@ -62,8 +62,8 @@ here, once:
 <!-- maturity-levels:start -->
 | Level | Criteria | What it promises |
 |---|---|---|
-| **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) plays that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
-| **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game played on all three systems rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
+| **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) has jobs that play that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. What has run so far: the list on macOS, with both packages played headless (the guide's "Check results: macOS"); parts of it on Windows; nothing on Linux yet. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
+| **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game that the list of checks plays rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
 | **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: its public items are outside the versions' promise (STABILITY.md, "Unstable"): they may change or be removed in any release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
 
 - A level is assigned from what the repository records: the tests in the list
@@ -589,9 +589,10 @@ The list of checks (`scripts/checks.yml`, run locally by maintainers; there
 is no CI) covers Linux x86-64, macOS (Apple Silicon) and Windows x86-64, and
 builds the web (wasm32, WebGPU with a WebGL2 fallback); small web builds (2D,
 3D and the complete-game reference) are also run in headless Chromium and
-WebKit with WebGL2 (`web/smoke/`; Firefox is tried there too, but headless
-Firefox on a GPU-less Linux machine has no WebGL2, so it is reported, not
-verified). WebGPU is gated on a real GPU: the list's `web-gpu` job runs the
+WebKit with WebGL2 (`web/smoke/`). Firefox runs the 2D and 3D builds with
+WebGL2 on a Mac's GPU (recorded in the guide's "Check results: macOS",
+2026-11-26); headless Firefox on a GPU-less Linux machine has no WebGL2, so
+there it is reported, not verified. WebGPU is gated on a real GPU: the list's `web-gpu` job runs the
 2D and 3D builds in headless Chromium on a Mac's GPU (Metal) and fails when
 WebGPU is unsupported, falls back to WebGL2, or runs on a software renderer
 (SwiftShader) or a fallback adapter; it also records the 3D build's frame

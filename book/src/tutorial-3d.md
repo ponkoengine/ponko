@@ -25,15 +25,17 @@ after every step. Doing the 2D one first helps, but isn't needed.
 ## Step 0: a new project
 
 ```sh
-cargo install ponko_cli
+cargo install ponko_cli --version 0.2.0-rc.1
 ponko new lantern_yard --3d
 cd lantern_yard
 cargo run
 ```
 
-A window opens with a spinning cube. This tutorial needs Ponko 0.2; until
-it's released, add `--git https://github.com/ponkoengine/ponko` to `ponko
-new`, which depends on the engine's `main` branch.
+A window opens with a spinning cube. This tutorial needs Ponko 0.2. Until
+0.2.0 is released, the install command names the release candidate (plain
+`cargo install ponko_cli` finds no version yet), and the project depends on
+it. For the engine's `main` branch instead, add
+`--git https://github.com/ponkoengine/ponko` to `ponko new`.
 
 The game uses 3D physics, which includes 3D. In `Cargo.toml`:
 

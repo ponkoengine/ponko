@@ -1,7 +1,7 @@
 # Ember Hop: a platformer, start to finish
 
 > **Maturity: [proven](maturity.md).** Game: Ember Hop itself, packaged and
-> played on Linux, macOS and Windows. Tests: `tests/ember_hop.rs`, and its
+> played by the list of checks (recorded on macOS). Tests: `tests/ember_hop.rs`, and its
 > walk-through from the package. Platforms: Linux, macOS and Windows, headless
 > (the workspace tests in the list of checks); the package also in a window.
 > Graphics: the packaged games run in a window on Linux (software Vulkan under

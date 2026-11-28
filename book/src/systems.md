@@ -1,7 +1,7 @@
 # Systems and the frame
 
 > **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
-> and played on Linux, macOS and Windows. Tests:
+> and played by the list of checks (recorded on macOS). Tests:
 > `tests/system_registration.rs`, `tests/phases.rs`,
 > `tests/schedule_barriers.rs`. Platforms: Linux, macOS and Windows, headless
 > (the workspace tests in the list of checks). Graphics: not involved.

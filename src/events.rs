@@ -1,8 +1,9 @@
 //! Events: messages from one system to others.
 //!
 //! **Maturity: proven**, from the guide chapter `events.md`. Game: Coin Dash and Ember Hop,
-//! packaged and played on Linux, macOS and Windows. Tests: `tests/events.rs`. Platforms: Linux,
-//! macOS and Windows, headless (the workspace tests in the list of checks). Graphics: not involved.
+//! packaged and played by the list of checks (recorded on macOS). Tests: `tests/events.rs`.
+//! Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of checks).
+//! Graphics: not involved.
 //!
 //! A system sends with `ctx.events.send(Died { .. })` and others read with
 //! `ctx.events.read::<Died>()`. Every system has its own read position, so a

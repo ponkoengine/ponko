@@ -23,7 +23,7 @@ examples.
 
 The same workloads written as an ordinary Ponko game and an ordinary Bevy
 app, on one machine (MacBook Pro, Apple M4 Max, macOS 27.2.1, rustc
-1.100.0, Metal, measured 2026-11-22). Each cell is the median of three runs,
+1.100.0, Metal, measured 2026-11-22; the two 3D rows again on 2026-11-26). Each cell is the median of three runs,
 in milliseconds per frame or tick, Ponko first; the ratio is Bevy's time
 over Ponko's, so above 1× Ponko is faster and below 1× Bevy is. "As a
 project starts" uses each engine's defaults and Cargo's release profile;
@@ -45,8 +45,8 @@ and a review of what is and is not the same on both sides are in
 | Sprites: 100k moving | 1.10 / 11.6 | 10× | 1.02 / 6.74 | 6.6× |
 | Sprites: 100k moving, a different tint each | 1.09 / 44.8 | 41× | 0.99 / 37.4 | 38× |
 | Sprites: 1M moving | 8.32 / 105.7 | 13× | 7.62 / 58.9 | 7.7× |
-| 3D: 100k moving meshes with a 4-cascade sun shadow | 4.63 / 15.8 | 3.4× | 4.68 / 14.1 | 3.0× |
-| 3D: 1,000 skinned characters (16 joints) | 6.06 / 3.86 | **0.64×, Bevy faster** | 6.06 / 3.12 | **0.51×, Bevy faster** |
+| 3D: 100k moving meshes with a 4-cascade sun shadow | 4.65 / 15.9 | 3.4× | 4.66 / 13.7 | 2.9× |
+| 3D: 1,000 skinned characters (16 joints) | 2.38 / 3.83 | 1.6× | 2.36 / 3.04 | 1.3× |
 | 2D physics: 10k boxes, one tick | 6.39 / 8.11 | 1.3× | 3.25 / 4.50 | 1.4× |
 | UI: 10k nodes, still | 1.63 / 4.58 | 2.8× | 1.24 / 2.71 | 2.2× |
 | UI: 10k nodes, all recolored every frame | 2.49 / 6.73 | 2.7× | 1.66 / 4.60 | 2.8× |
@@ -60,10 +60,11 @@ first: a clean debug build takes 45.2 / 118 s as a project starts and
 3.6 / 11.9 MB. A rebuild after a one-line change in `src/main.rs` is
 0.29 / 0.32 s tuned, close to the noise.
 
-Bevy is faster at skinned characters in both tables (issue #241 tracks
-it), and Ponko has no pipelined renderer, which is most of what Bevy gains
-between the tables. These are sixteen workloads on one machine, not a
-ranking of the engines.
+On this machine Ponko is faster on every row of both tables. On a
+[Windows desktop with Vulkan](performance.md#windows-desktop-ryzen-5-3600-radeon-rx-vega-directx-12-and-vulkan),
+Bevy draws the skinned characters faster (8.35 against 8.72 ms). Ponko has
+no pipelined renderer, which is most of what Bevy gains between the tables.
+These are sixteen workloads on two machines, not a ranking of the engines.
 
 Ponko aims to make a capable 2D/3D engine accessible through a small,
 code-first public API and integrated runtime tools. Its differentiator is
