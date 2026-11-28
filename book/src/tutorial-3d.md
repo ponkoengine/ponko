@@ -39,7 +39,7 @@ The game uses 3D physics, which includes 3D. In `Cargo.toml`:
 
 ```toml
 [dependencies]
-ponko = { version = "0.2", features = ["physics3d"] }
+ponko = { version = "0.2.0-rc.1", features = ["physics3d"] }
 ```
 
 **The yard.** Copy

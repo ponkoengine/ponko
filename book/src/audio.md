@@ -67,7 +67,7 @@ machines without audio, are silent but run the same code. For servers you
 can drop the audio library entirely:
 
 ```toml
-ponko = { version = "0.1", default-features = false }
+ponko = { version = "0.2.0-rc.1", default-features = false }
 ```
 
 The sound API stays; it just makes no noise. The C library has the same

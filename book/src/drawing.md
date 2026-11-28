@@ -249,7 +249,7 @@ edit that doesn't read keeps the last good atlas.
 
 ```toml
 [dependencies]
-ponko = { version = "0.1", features = ["aseprite-source"] }
+ponko = { version = "0.2.0-rc.1", features = ["aseprite-source"] }
 ```
 
 ```rust
@@ -666,7 +666,7 @@ features, none of them tied to `3d`:
 
 ```toml
 # Cargo.toml: WebP too, and no JPEG decoder in the build
-ponko = { version = "0.1", default-features = false, features = ["window", "audio", "image-webp"] }
+ponko = { version = "0.2.0-rc.1", default-features = false, features = ["window", "audio", "image-webp"] }
 ```
 
 A file in a format the build leaves out fails with an `Unsupported` error
@@ -694,7 +694,7 @@ other texture:
 
 ```toml
 # Cargo.toml
-ponko = { version = "0.1", features = ["3d", "compressed-textures"] }
+ponko = { version = "0.2.0-rc.1", features = ["3d", "compressed-textures"] }
 ```
 
 ```rust

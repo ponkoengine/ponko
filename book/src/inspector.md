@@ -191,7 +191,7 @@ the `inspector` cargo feature (on by default). Games that don't want egui
 in their build turn default features off:
 
 ```toml
-ponko = { version = "0.1", default-features = false, features = ["window", "audio"] }
+ponko = { version = "0.2.0-rc.1", default-features = false, features = ["window", "audio"] }
 ```
 
 C and C++ games get the inspector from `ponko_ffi`'s `inspector` feature,

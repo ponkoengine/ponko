@@ -401,7 +401,7 @@ Hebrew run right to left. Those need the **`text-shaping`** cargo feature
 (on by default in the C library):
 
 ```toml
-ponko = { version = "0.2", features = ["text-shaping"] }
+ponko = { version = "0.2.0-rc.1", features = ["text-shaping"] }
 ```
 
 With it, every string that isn't plain ASCII goes through

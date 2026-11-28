@@ -1,6 +1,6 @@
 [package]
 name = "ponko"
-version = "0.1.0"
+version = "0.2.0-rc.1"
 description = "A code-first 2D and 3D game engine with integrated simulation, C++ bindings, and tools for AI-assisted development."
 keywords = ["gamedev", "engine", "2d", "3d", "ecs"]
 categories = ["game-engines", "game-development", "simulation"]
@@ -133,7 +133,7 @@ files = [
 ]
 
 [dependencies]
-ponko_aseprite = { path = "crates/ponko_aseprite", version = "0.1.0", optional = true }
+ponko_aseprite = { path = "crates/ponko_aseprite", version = "0.2.0-rc.1", optional = true }
 taffy = { version = "0.15.1", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "content_size"] }
 navmesh-rs = { version = "0.2.1", optional = true, default-features = false, features = ["std", "libm", "recast", "detour", "crowd", "tilecache", "polyref64"] }
 # Obstacle turns use the same platform-independent sin/cos as the navmesh backend.
@@ -146,9 +146,9 @@ renet = "2.0.0"
 # constant time.
 siphasher = "1.0.4"
 subtle = { version = "2.6.1", default-features = false }
-ponko_ecs = { path = "crates/ponko_ecs", version = "0.1.0", features = ["serde", "derive"] }
+ponko_ecs = { path = "crates/ponko_ecs", version = "0.2.0-rc.1", features = ["serde", "derive"] }
 # `#[derive(Replicate)]` (exported as `ponko::net::Replicate`).
-ponko_macros = { path = "crates/ponko_macros", version = "0.1.0" }
+ponko_macros = { path = "crates/ponko_macros", version = "0.2.0-rc.1" }
 half = { version = "2.7.1", optional = true }
 # The CPU's FFT for the water kit's waves from a spectrum (feature `3d`):
 # the most used Rust FFT, with NEON and SSE/AVX paths picked at run time;
@@ -399,7 +399,7 @@ orx-parallel-wasm-allocator = "0.2.1"
 # server's tools, in-process. Path only (no version): the MCP crate's tests
 # depend on the engine, and a published cycle between the two can't resolve.
 [dev-dependencies]
-ponko_image_diff = { path = "crates/ponko_image_diff", version = "0.1.0" }
+ponko_image_diff = { path = "crates/ponko_image_diff", version = "0.2.0-rc.1" }
 ponko_mcp = { path = "crates/ponko_mcp" }
 # The renderer's tests translate its shaders to GLSL ES 3.0, as wgpu does for
 # WebGL2 (src/render/gpu3d/webgl2_shaders_test.rs). The naga wgpu already uses.

@@ -1,6 +1,6 @@
 [package]
 name = "ponko_cli"
-version = "0.1.0"
+version = "0.2.0-rc.1"
 description = "The `ponko` command: new Ponko game projects from templates (2D, 3D, headless), distributable packages of a game, cooked assets and GPU-compressed textures"
 keywords = ["gamedev", "cli", "template", "packaging"]
 categories = ["game-development", "command-line-utilities", "development-tools"]
@@ -30,7 +30,7 @@ doc = false
 # (deflate and gzip: flate2 on its pure-Rust backend; zip checksums:
 # crc32fast), so packaging needs no `zip` or `tar` program on any OS.
 [dependencies]
-ponko_image_diff = { path = "../ponko_image_diff", version = "0.1.0" }
+ponko_image_diff = { path = "../ponko_image_diff", version = "0.2.0-rc.1" }
 serde_json = "1.0.154"
 flate2 = "1.1.10"
 crc32fast = "1.5.0"
@@ -55,7 +55,7 @@ sha2 = "0.10.9"
 meshopt = { version = "0.7.0", optional = true }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"], optional = true }
 # Same source decoding as the engine's opt-in development loader.
-ponko_aseprite = { path = "../ponko_aseprite", version = "0.1.0", optional = true }
+ponko_aseprite = { path = "../ponko_aseprite", version = "0.2.0-rc.1", optional = true }
 
 [dev-dependencies]
 # Decodes the BCn blocks `ponko textures` writes, to compare with the source.

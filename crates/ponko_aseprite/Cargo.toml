@@ -1,6 +1,6 @@
 [package]
 name = "ponko_aseprite"
-version = "0.1.0"
+version = "0.2.0-rc.1"
 description = "Shared Aseprite source decoder for Ponko development loading and cooking"
 edition.workspace = true
 rust-version.workspace = true

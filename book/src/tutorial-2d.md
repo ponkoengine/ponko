@@ -47,7 +47,7 @@ The crab falls and collides, so turn on 2D physics in `Cargo.toml`:
 
 ```toml
 [dependencies]
-ponko = { version = "0.2", features = ["physics"] }
+ponko = { version = "0.2.0-rc.1", features = ["physics"] }
 ```
 
 (With `--git`, keep the `git = ...` the template wrote and add the

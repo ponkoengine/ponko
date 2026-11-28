@@ -131,7 +131,7 @@ In `Cargo.toml` that is:
 
 ```toml
 [dependencies]
-ponko = "0.1"
+ponko = "0.2.0-rc.1"
 ```
 
 Its API reference is [on docs.rs](https://docs.rs/ponko/latest/ponko/).
