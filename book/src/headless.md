@@ -343,7 +343,7 @@ sound and quit recipes are tested this way.
 ## A million entities, no window
 
 The same API scales. This program moves one million entities for 600 fixed
-ticks, with the query spread over all cores (shown in Rust only):
+ticks, with the query spread over all cores (the example is in Rust):
 
 ```rust
 use ponko::prelude::*;
