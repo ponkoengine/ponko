@@ -1091,7 +1091,10 @@ fn fill_layers(s: Surface, uv: vec2<f32>, uv1: vec2<f32>, world: vec3<f32>, geom
         l.film = thin_film(1.0, values[4].y, n_v, thickness, base);
     }
     layers = l;
-    if (l.on & LAYER_TRANSMISSION) != 0u {
+    // `info`, not `l`: `l` holds screen derivatives, so a browser's
+    // uniformity analysis counts a branch on any of it as non-uniform, and
+    // the layer maps sample inside.
+    if (info.x & LAYER_TRANSMISSION) != 0u {
         fill_transmission(transformed_normal);
     }
 }
