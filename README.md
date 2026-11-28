@@ -137,8 +137,8 @@ the [code of conduct](CODE_OF_CONDUCT.md), and report vulnerabilities as
 
 ## How Ponko is developed
 
-Ponko has one maintainer, Leon Mamić, who directs and reviews the work; a
-few other people have contributed changes. Much of the code is written by AI
+Ponko has one maintainer, Leon Mamić, who directs and reviews the work; one
+other person has contributed changes so far. Much of the code is written by AI
 coding agents under that direction, and most commits on `main` name an agent
 as co-author. Every change passes the same checks whoever wrote it, as
 [AGENTS.md](AGENTS.md) and [`scripts/checks.yml`](scripts/checks.yml) list
