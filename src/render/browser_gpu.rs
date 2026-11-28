@@ -159,12 +159,14 @@ mod web {
             return Err(WebGpuFallback::LostAtStart(message));
         }
         test_frame.await.map_err(WebGpuFallback::Surface)?;
-        // From here on, new buffers are filled through the queue rather
-        // than made mapped (see `traffic::init_unmapped`).
-        crate::render::traffic::fill_new_buffers_with(&queue);
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| WebGpuFallback::Surface(e.to_string()))?;
+        // From here on, new buffers are filled through the queue rather
+        // than made mapped (see `traffic::init_unmapped`). Only once the
+        // surface exists: a failed one falls back to WebGL2, which must not
+        // write its buffers through this WebGPU queue.
+        crate::render::traffic::fill_new_buffers_with(&queue);
         Ok(Opened {
             instance,
             surface,
