@@ -29,7 +29,7 @@ Give your game a `hotpatch` feature that turns on the engine's:
 
 ```toml
 [dependencies]
-ponko = "0.1"
+ponko = "0.2.0-rc.1"
 
 [features]
 hotpatch = ["ponko/hotpatch"]

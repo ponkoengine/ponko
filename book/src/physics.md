@@ -12,7 +12,7 @@ notice who walked in: 2D rigid-body physics, built on
 [rapier](https://rapier.rs). It's behind the `physics` feature:
 
 ```toml
-ponko = { version = "0.1", features = ["physics"] }
+ponko = { version = "0.2.0-rc.1", features = ["physics"] }
 ```
 
 (The C library, `ponko_ffi`, has it on by default.) For 3D bodies, terrain

@@ -16,7 +16,7 @@ builds what goes up to Steam. Multiplayer over Steam (lobbies, invites,
 relays) is in [Lockstep, rollback and your own protocol](networking.md#over-steam).
 
 ```toml
-ponko = { version = "0.1", features = ["steam"] }
+ponko = { version = "0.2.0-rc.1", features = ["steam"] }
 ```
 
 ## The app id

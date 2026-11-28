@@ -201,6 +201,8 @@ The level each top-level module of `ponko` gives in its rustdoc.
 - [Cookbook: fifty small recipes](cookbook/index.md): An index of recipes; each recipe page carries its level.
 - [Naming and compatibility](naming.md): Naming rules and the map of old names; nothing to rate.
 - [Migrating from 0.0.1 to 0.1.0](migrating-to-0.1.md): A migration guide for one release.
+- [What's new in 0.2](release-0.2.md): The release notes of one release.
+- [Migrating from 0.1 to 0.2](migrating-to-0.2.md): A migration guide for one release.
 - [Performance and benchmarks](performance.md): Benchmarks and how they were measured; the features measured carry their own levels.
 - [GPU regression tests](render-tests.md): How the GPU regression tests are written and run.
 - [Well-known content](known-content.md): How the 3D loader and renderer are checked against content other people made.

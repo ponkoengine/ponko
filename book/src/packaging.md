@@ -41,7 +41,7 @@ license files, writes `THIRD-PARTY-NOTICES.txt` for every library linked into
 it, lays the package out for the platform, archives it, and starts the
 packaged copy once to check it runs (the [smoke run](#the-smoke-run-of-any-package)). Everything goes to
 `target/package/` (`--out` elsewhere), named
-`<name>-<version>-<os>-<arch>`, for example `coin-dash-0.1.0-macos-aarch64`:
+`<name>-<version>-<os>-<arch>`, for example `coin-dash-0.2.0-macos-aarch64`:
 
 | Platform | Layout | Archive (default) |
 |---|---|---|

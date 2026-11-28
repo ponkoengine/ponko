@@ -9,8 +9,8 @@ the checked-in implementation and the linked official documentation; it does
 not claim feature parity or general performance superiority. Product versions
 and tool availability change.
 
-**Versions compared.** Ponko: this guide's `main` (0.1.0 is the latest
-release; see [Getting started](getting-started.md#your-first-game)). Bevy:
+**Versions compared.** Ponko: this guide's `main` (0.2.0-rc.1, the
+candidate for 0.2.0, is the latest release; see [Getting started](getting-started.md#your-first-game)). Bevy:
 **0.20.1**, the newest release, pinned in `bench/compare/Cargo.toml` and
 used for every number and every Bevy API named below. Unity: the newest
 long-term-support release is [Unity 6.3 LTS](https://unity.com/releases/unity-6);

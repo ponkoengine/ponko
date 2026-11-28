@@ -1,6 +1,6 @@
 [package]
 name = "ponko_ffi"
-version = "0.1.0"
+version = "0.2.0-rc.1"
 description = "C API for Ponko (include/ponko.h); include/ponko.hpp wraps it for C++17."
 keywords = ["gamedev", "ffi", "c", "cpp"]
 categories = ["game-engines", "api-bindings"]
@@ -93,8 +93,8 @@ mods-wasm = ["ponko/mods-wasm"]
 # --no-default-features (glTF and Recast stay in every C build). Making them
 # optional would change the native interface; scripts/feature-deps.sh checks
 # that nothing else optional is forced on.
-ponko = { path = "../..", version = "0.1.0", default-features = false, features = ["3d", "navmesh", "lobby"] }
-ponko_ecs = { path = "../ponko_ecs", version = "0.1.0" }
+ponko = { path = "../..", version = "0.2.0-rc.1", default-features = false, features = ["3d", "navmesh", "lobby"] }
+ponko_ecs = { path = "../ponko_ecs", version = "0.2.0-rc.1" }
 rayon = "1.12.0"
 serde = "1.0.229"
 serde_json = "1.0.154"

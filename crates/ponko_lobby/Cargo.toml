@@ -1,6 +1,6 @@
 [package]
 name = "ponko_lobby"
-version = "0.1.0"
+version = "0.2.0-rc.1"
 description = "A reference lobby, matchmaking and relay server for Ponko games: rooms with codes, host migration, rate limits."
 keywords = ["gamedev", "lobby", "matchmaking", "relay", "server"]
 categories = ["game-development", "network-programming"]
@@ -47,7 +47,7 @@ required-features = ["webrtc"]
 [dependencies]
 # The engine without a window, GPU, sound or gamepads (a server needs none of
 # them), with the lobby protocol and client (`lobby`).
-ponko = { path = "../..", version = "0.1.0", default-features = false, features = ["lobby"] }
+ponko = { path = "../..", version = "0.2.0-rc.1", default-features = false, features = ["lobby"] }
 serde_json = "1.0.154"
 
 [dev-dependencies]

@@ -1,6 +1,6 @@
 [package]
 name = "ponko_image_diff"
-version = "0.1.0"
+version = "0.2.0-rc.1"
 description = "CPU-only image comparison shared by Ponko tools and GPU regression tests"
 edition.workspace = true
 rust-version.workspace = true

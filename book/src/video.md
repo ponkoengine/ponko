@@ -18,7 +18,7 @@ picture keeps to it.
 
 ```toml
 [dependencies]
-ponko = { version = "0.1", features = ["video"] }
+ponko = { version = "0.2.0-rc.1", features = ["video"] }
 ```
 
 ```rust,no_run
@@ -174,7 +174,7 @@ by naming the decoder with its `asm` feature next to the engine:
 
 ```toml
 [dependencies]
-ponko = { version = "0.1", features = ["video"] }
+ponko = { version = "0.2.0-rc.1", features = ["video"] }
 re_rav1d = { version = "0.1.3", default-features = false, features = ["bitdepth_8", "asm"] }
 ```
 

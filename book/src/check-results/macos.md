@@ -19,6 +19,96 @@ jobs written for macOS; the platform-neutral jobs written for `ubuntu-latest`
 (clippy, docs, Miri, the web build and the browser runs, templates and more)
 ran on this Mac by hand, as recorded below.
 
+## 2026-11-27: the 0.2.0-rc.1 candidate (#528)
+
+The whole list on the release branch `release/0.2.0-rc.1` (draft pull
+request "Release 0.2.0-rc.1"), first at its head before rebasing,
+`ed94d84f`, then again on the rebased branch for the jobs that had failed.
+
+**Machine.** Apple M4 Max (14 CPU cores, 32 GPU cores, 36 GB), macOS 27.2.1,
+Xcode 27.2, CMake 4.5.1. GPU adapter: Apple M4 Max through wgpu's Metal
+backend. The machine was shared with other agents' builds: the load average
+was about 60 during the full run, and 6 to 80 during the reruns.
+
+**Toolchains.** Rust 1.100.0 (stable; the `RUST` of `release-matrix.py`),
+nightly 1.102.0 (2026-11-24) for the sanitizers, Miri and coverage, 1.95 for
+the MSRV check; cargo-semver-checks 0.51.0, cargo-deny 0.20.2,
+cargo-llvm-cov 0.9.2, cbindgen 0.29.2, mdBook 0.5.4; Node 26.13.1 with
+Playwright 1.65.1's Chromium 159.0.8154.6 (chromium-1255) and WebKit
+(webkit-2388).
+
+**Result.** Everything that applies to macOS and runs without a person
+passes on the final branch. The bugs on `main` that came up were fixed in
+four pull requests of their own before the candidate was folded again:
+#700, #703, #704 and #705 (below). `run-checks.py` on `ed94d84f`: 83 steps passed, 6 failed,
+303 skipped (other OSes, a person, or a pull request needed), in 87 min.
+
+### Failed, then fixed on `main`
+
+| Check | What failed | Fix |
+|---|---|---|
+| `test`: Tests (default features); `test-features`: command line tool feature subsets | At a candidate's version, the template test expected a `"0.2"` pin, and two cook fixture tests compared the version the cook stamps into a sheet's `meta.version` and each KTX2 image's `KTXwriter` | #700: the template expects the candidate's exact pin; the fixtures compare apart from the stamp and check it |
+| `clippy`: engine with only a window, with every image format, with text shaping and system fonts (run by hand) | dead code in window-only test builds without audio | #700 |
+| `docs`: workspace docs, every public feature (run by hand) | a broken link to `Ui::image` | #700 |
+| `templates`: the templates' unit tests (run by hand) | the same template pin test | #700 |
+| `templates`: a new project packaged, on the rebased branch (run by hand) | the ignored packaging test expected `ponko 0.1.0` in the notices | #705: it expects the current version |
+| `web-gpu`: Chromium, WebGPU on the GPU; `web-examples`: every gallery page on Chromium WebGPU and on WebKit, Shard Grove on the GPU | 3D canvases blank on WebGPU. Chromium rejected the built-in shader: `textureSampleBias` outside uniform control flow, in the layered material's branch on transmission (naga accepts it, so native drew). The four steps failed alike at a load of about 60 and again at 6 to 14, so not load | #703: the branch reads the material's `layer_info` |
+| `test-features`: command line tool feature subsets, on the rebased branch | #700's test helper was dead code in five of the six builds, an error with warnings denied | #704: the helper has its test's `cfg` |
+
+### Passed
+
+| Check | Result | Time |
+|---|---|---|
+| `release-check.py check v0.2.0-rc.1` | versions, changelog section and fragments agree | 0 s |
+| `cargo deny check` | advisories, bans, licenses, sources ok | 2 s |
+| `semver-checks.py run` | `ponko`, `ponko_ecs`, `ponko_ffi`, `ponko_unity` break against 0.1.0, all announced by merged changes; none added by the release branch | 3 min 12 s |
+| `cargo publish --workspace --dry-run --locked` | every crate packages and verifies | 2 min 17 s |
+| `cargo test -p ponko_mcp --test agent_suite` | 11/11 tasks solved, 36/36 checks, 50/50 negative controls caught | 2 min 1 s |
+| `test` on the rebased branch | default-features tests, examples, image margins | 14 min 0 s |
+| `test-features` on the rebased branch | 27 steps; the command line subsets passed after #704 (134, 149, 150, 142, 150 and 194 tests) | 25 min 25 s |
+| `web-gpu`, `web-examples` on the final branch | 11 of 11 steps, load 2 to 6 (and 11 of 11 on #703's branch before it merged) | 11 min 50 s |
+| `clippy` on the rebased branch (run by hand) | 32 legs, each `-- -D warnings` | 5 min 51 s |
+| `docs` on the rebased branch (run by hand) | workspace docs; every public feature | 43 s |
+| `templates` on the final branch (run by hand) | the CLI's unit tests, each template generated and checked, a new project packaged; each template's own tests | 51 s |
+| `fmt`, `leaks`, `reference-images`, `feature-deps`, `book`, `native`, `web-smoke-runner`, `package-smoke`, `ios` (`ed94d84f`) | every step | 14 min 39 s |
+| `sanitizers` (`ed94d84f`) | C and C++ test programs under ASan and UBSan; `ponko_ffi` tests under ASan | 6 min 36 s |
+| `msrv`, `api-snapshots`, naming paths, `validation-bundles` (run by hand) | pass | 5 min |
+| Miri: ECS, stacked borrows | 443 passed, 0 failed, 16 ignored | 32 min 28 s |
+| Miri: `par_for_each`, tree borrows | 158 passed, 0 failed, 17 ignored | 10 min 15 s |
+| Miri: engine unsafe code, tree borrows | 37 passed, 0 failed | 3 min 58 s |
+| Fuzzing: the 17 targets of `fuzz/`, 60 s each, from the seed corpus | no findings | 31 min 42 s |
+| Coverage (`cargo +nightly llvm-cov --workspace --doctests`) | 11,690 tests passed, 0 failed; 90.2% of mapped lines (246,559 of 273,433); see [Workspace test coverage](../test-coverage.md) | 44 min 3 s |
+
+Miri's stacked-borrows leg, fuzzing and the sanitizers ran on `ed94d84f`:
+the ECS, the fuzz targets and the C library are the same on the final
+branch. The two tree-borrows legs and coverage ran on the rebased branch
+before #703 to #705, which changed only WGSL and tests.
+
+### Again after #702, #710 and #711 (2026-11-28)
+
+Three more changes went in before the cut: #702 (reading GPU buffers and
+render targets back on the CPU, in Rust and the C API), #710 and #711
+(Safari WebGPU: buffers filled through the queue, and no screen derivatives
+in the shared mesh prelude). Each was checked on its own (fmt, clippy with
+warnings denied for the features it touches including wasm, and the tests
+and GPU tests of what it touches). The rebased branch, folded again, then
+ran a short list:
+
+| Check | Result | Time |
+|---|---|---|
+| `release-check.py check v0.2.0-rc.1` | pass | 0 s |
+| `cargo publish --workspace --dry-run --locked` | pass | 2 min 9 s |
+| `native` | 8 of 8 steps: the C header, dynamic exports, the C and C++ tests (Release), the C++ battle's validation bundle | 3 min 2 s |
+| `web-gpu` | 4 of 4 steps: Chromium WebGPU (2D and 3D fixtures), WebGL2, frame times | 1 min 39 s |
+| `cargo test -p ponko_cli` | 220 passed, 0 failed (3 ignored: the template, packaging and server runs of `templates`) | 20 s |
+| `check-book-snippets.py`, `mdbook build book` | pass | 14 s |
+
+### Not run here
+
+The benchmark baseline, the agent suite with a real agent, the checks that
+need a person or a window, Windows (the whole list on an NVIDIA machine) and
+Linux (`linux-all` of the release matrix) are outside this run.
+
 ## 2026-11-26: five harder agent tasks, replayed and tried by an AI coding agent (#630)
 
 The suite's five new tasks ("The agent acceptance suite" in
