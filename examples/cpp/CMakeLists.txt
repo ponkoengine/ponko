@@ -28,7 +28,7 @@ set(CMAKE_BUILD_RPATH "${PONKO_LIBRARY_DIR}")
 # (Clang or GCC): -DPONKO_SANITIZE=ON. Every heap block the library hands out
 # comes from the C allocator, so ASan also checks the Rust side's frees and
 # double frees of what the programs own. The command list is in
-# CONTRIBUTING.md, "Unsafe code and sanitizers".
+# book/src/contributing.md, "Running the unsafe-code checks".
 option(PONKO_SANITIZE "Build the programs with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 if(PONKO_SANITIZE AND NOT MSVC)
     add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)

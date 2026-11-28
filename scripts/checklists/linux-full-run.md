@@ -12,7 +12,7 @@ Read [the conventions](README.md#conventions) first.
 
 ## 1. The whole list
 
-On a clean checkout of `main` (note its revision), with Python 3.10 or later, Git, Bash, the Rust toolchains the list asks for, and the ALSA and udev headers (book/src/getting-started.md; AT-SPI and D-Bus for the accessibility lane). See "Local checks" in `CONTRIBUTING.md` for the tools of each job.
+On a clean checkout of `main` (note its revision), with Python 3.10 or later, Git, Bash, the Rust toolchains the list asks for, and the ALSA and udev headers (book/src/getting-started.md; AT-SPI and D-Bus for the accessibility lane). See "Running local checks" in `book/src/contributing.md` for the tools of each job.
 
 ```sh
 git clone https://github.com/ponkoengine/ponko && cd ponko

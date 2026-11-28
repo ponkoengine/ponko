@@ -1,1240 +1,165 @@
 # Contributing to Ponko
 
-Thanks for your interest! Everyone is welcome here, whether this is your
-first pull request ever or your hundredth. Bug reports, questions, benchmarks
-on your hardware, typo fixes, docs, examples and code all count as
-contributions, and none of them is too small.
+<a id="start-with-what-you-know"></a>
+Everyone is welcome, whether this is your first pull request or your
+hundredth. Bug reports, questions, benchmarks on your hardware, typo fixes,
+docs, examples, tests and code all count, and none of them is too small.
+You do not need to know the whole engine, or C and C++, to fix one thing:
+a Rust-only pull request is welcome, and maintainers do the guide pages, C
+and C++ bindings and other platforms a change may also need.
 
-You don't need to know the whole engine, or C and C++, or every check below.
-If you get stuck anywhere, ask on the issue or in
-[Discussions](https://github.com/ponkoengine/ponko/discussions): there are no
-silly questions, and a maintainer will help you finish.
+There is no contributor license agreement (CLA) and no sign-off line to add.
 
-## Quick start
+<a id="quick-start"></a><a id="setting-up"></a><a id="making-a-change"></a>
+## Your first change in four steps
 
-1. **Clone** and check that your machine builds the engine (stable Rust; on
-   Linux also `sudo apt-get install libasound2-dev libudev-dev`):
+You need stable Rust (`rustup update stable`) and Git. Per system:
+
+- **Linux:** the ALSA and udev headers, for sound and gamepads
+  (`sudo apt-get install libasound2-dev libudev-dev`).
+- **macOS:** the Xcode command line tools (`xcode-select --install`).
+- **Windows:** Visual Studio or its Build Tools with the "Desktop development
+  with C++" workload, which Rust needs for linking.
+- For the C and C++ side only: CMake and a C++17 compiler.
+
+1. **Clone and build.** The first build compiles every dependency, so it is
+   the slow one; later builds only rebuild what changed.
    ```sh
    git clone https://github.com/ponkoengine/ponko && cd ponko
    python3 scripts/run-checks.py --quick
    ```
-2. **Pick** an issue labelled
-   [`good first issue`](https://github.com/ponkoengine/ponko/labels/good%20first%20issue)
-   (each names the files to read and how to test the change) that has no
-   assignee, and comment that you'd like to take it. A maintainer assigns it
-   to you, usually within a couple of days ([Claiming an
-   issue](#claiming-an-issue)). Not sure what to pick? Ask in
-   [Discussions](https://github.com/ponkoengine/ponko/discussions).
-3. **Branch** from `main` (`git switch -c fix/<topic>`), make one focused change
-   with a test, and run the checks it needs ([Checks: start with your
-   change](#checks-start-with-your-change)).
-4. **Open a pull request** to `main` (`gh pr create --base main`, or the
-   button on GitHub). Say what changed and which checks you ran; a draft is
-   fine, and so is a pull request that is not quite done or has a failing
-   check: say what you're unsure about and we'll help. Maintainers answer
-   within a week, usually sooner.
+2. **Pick an issue** and comment that you would like to take it
+   ([Good first issues](#good-first-issues)). For a typo, skip this step.
+3. **Branch from `main`** (`git switch -c fix/<topic>`), make one focused
+   change, add a test for changed behavior, and run the checks it needs
+   ([Which checks your change needs](#which-checks-your-change-needs)).
+4. **Open a pull request to `main`** (`gh pr create --base main`, or the
+   button on GitHub). Say what changed and which checks you ran. A draft, or
+   a pull request with a failing check, is fine: say what you are unsure about.
 
-That's all you need to start. The rest of this file is reference: read the
-part you need when you need it, and skip the rest.
+<a id="finding-a-manageable-contribution"></a>
+## Good first issues
 
-## Start with what you know
-
-**Rust-only pull requests are welcome.** You do not need to know C or C++,
-write a guide chapter, or work on unrelated subsystems to contribute a Rust
-fix or feature. Small fixes, tests, examples and documentation are useful
-contributions on their own. No design proposal is needed for an isolated fix.
-
-Keep your change focused, explain the behavior in the PR, and run the checks
-relevant to it. Tests for changed behavior matter; a full integration checklist
-is not an entry requirement. If a check needs tools or hardware you do not
-have, say so and ask for help.
-
-Maintainers own the broader integration work: guide updates, native bindings,
-paired examples and the full platform matrix. They can help in the PR or record
-separate follow-ups without assigning that work to you. Compatibility of
-existing APIs and bindings still needs to be preserved.
-
-[AGENTS.md](AGENTS.md) contains the detailed workflow and maintainer/agent
-integration checklist; you only need the parts relevant to your contribution.
-
-## Questions, bugs and ideas
-
-[GitHub Discussions](https://github.com/ponkoengine/ponko/discussions) is the
-place to talk: there is no separate chat room for now. Maintainers answer new
-issues and new discussions within a week; a pull request from outside gets a
-first answer in the same time.
-
-- **Questions:** ask in [Q&A](https://github.com/ponkoengine/ponko/discussions/categories/q-a),
-  so the answer stays findable for the next person.
-- **Bugs:** open an [issue](https://github.com/ponkoengine/ponko/issues/new)
-  with the smallest code that shows the problem, your OS and GPU, and what
-  you expected.
-- **Ideas and features:** start in [Ideas](https://github.com/ponkoengine/ponko/discussions/categories/ideas)
-  (or open an issue if you already have a concrete design), so we can agree on
-  the shape before you write the code. The engine aims for one obvious way to
-  do each thing, so a new API gets discussed before it's built.
-- **Made something?** Show it in [Show and tell](https://github.com/ponkoengine/ponko/discussions/categories/show-and-tell).
-- **Security issues:** don't open a public issue; see [SECURITY.md](SECURITY.md).
-
-How decisions are made, and who can merge, is in [GOVERNANCE.md](GOVERNANCE.md).
-
-## Finding a manageable contribution
-
-You do not need to understand the whole engine to fix an isolated bug, improve an
-example or clarify a guide page. Start with one reproducible behavior and its tests.
-Browse the [open issues](https://github.com/ponkoengine/ponko/issues), check for an
-existing assignee or active PR, and comment with the slice you want to tackle.
-
-- [`good first issue`](https://github.com/ponkoengine/ponko/labels/good%20first%20issue)
-  marks work sized for a few evenings. Each names the files to read and how to
-  test the change, and is kept for outside contributors.
-- [`help wanted`](https://github.com/ponkoengine/ponko/labels/help%20wanted) marks
-  larger work where a maintainer would welcome help; ask for a bounded first
-  step if the scope is unclear.
-
-The backlog also uses `priority: P0` through `priority: P3`, subsystem labels
-such as `area: ecs`, `area: rendering`, `area: shaders`, `area: assets` and
-`area: ui`, and `type:` labels. P0 establishes foundations; P1 addresses
-high-impact limitations, P2 is useful lower-urgency work, and P3 is research.
-Priority is not difficulty, and the backlog has no difficulty labels: read the
-acceptance criteria and dependencies. A focused reproducer or test case can
-contribute toward a large issue without claiming all of it.
-[ROADMAP.md](ROADMAP.md) explains the sequence; verify live issue status before
-starting. The 0.2.0 release is tracked in
-[#528](https://github.com/ponkoengine/ponko/issues/528).
+Issues labelled
+[`good first issue`](https://github.com/ponkoengine/ponko/labels/good%20first%20issue)
+are kept for people new to the project: maintainers and their tools do not
+take them. Each one says what to change, in which files, and how to test it.
+[`help wanted`](https://github.com/ponkoengine/ponko/labels/help%20wanted)
+marks larger work that is still self-contained; ask for a first step if the
+scope is unclear. [ROADMAP.md](ROADMAP.md) explains the order of the bigger work.
 
 ### Claiming an issue
 
-- **Ask on the issue.** Comment that you'd like to take it (or the slice you
-  want). An issue with no assignee and no open pull request is free.
-- **A maintainer assigns it to you**, usually within a couple of days. From
-  then on it is yours: nobody else starts it, and maintainers and their tools
-  don't take it or fold it into their own pull requests.
-- **Ask anything on the issue** while you work; a draft pull request early is
-  welcome.
-- **If you stop**, say so on the issue and you're unassigned; no explanation
-  needed. If an assigned issue sees no activity (a comment, a commit or a
-  draft pull request) for two weeks, a maintainer asks on the issue; with no
-  answer a week after that, the issue is free again.
-- **Issues assigned to a maintainer are taken.** Most open issues are; ask on
-  one if you'd like to help with it, and a maintainer can split off a slice for
-  you.
+- **Ask on the issue.** An issue with no assignee and no open pull request
+  is free. A maintainer assigns it to you; from then on nobody else starts
+  it, and maintainers and their tools do not fold it into their own work.
+- **Ask anything on the issue** while you work. An early draft pull request
+  is welcome.
+- **If you stop**, say so and you are unassigned; no reason needed. After two
+  weeks with no comment, commit or draft, a maintainer asks on the issue;
+  with no answer a week later, the issue is free again.
+- **Issues assigned to a maintainer are taken.** Ask on one if you want to
+  help, and a maintainer can split off a part for you.
 
-## Setting up
+<a id="checks-start-with-your-change"></a>
+## Which checks your change needs
 
-You need stable Rust (`rustup update stable`). On Linux, also install the
-ALSA and udev headers for audio and gamepads
-(`sudo apt-get install libasound2-dev libudev-dev`). For the C++
-side, you need CMake and a C++17 compiler.
+There is no CI: nothing runs on a pull request by itself. Run the checks for
+your kind of change and list them in the pull request. If one needs tools or
+hardware you do not have, say so; a maintainer runs it before merging.
 
-```sh
-git clone https://github.com/ponkoengine/ponko && cd ponko
-cargo test --workspace
-cargo run --release --example battle
-```
-
-## Repository layout
-
-Cargo packages use `ponko` / `ponko_*`; the old native names are gone, and legacy runtime environment variable names remain supported. Code
-uses `include/ponko.h`, `include/ponko.hpp`, and `PONKO_*` settings. See
-[the naming migration](book/src/naming.md) for precedence and compatibility.
-
-| Path | What's there |
+| Change | Run |
 |---|---|
-| `src/` | The engine (`ponko` crate) |
-| `crates/ponko_ecs` | The `ponko_ecs` ECS, usable on its own |
-| `crates/ponko_macros` | Derive macros (`#[derive(Component)]`), re-exported by `ponko_ecs` and `ponko` |
-| `crates/ponko_ffi` | The C API; `include/ponko.h` is generated from it |
-| `include/ponko.hpp` | The header-only C++ wrapper |
-| `crates/ponko_mcp` | The MCP server for AI agents |
-| `crates/ponko_bench` | Benchmarks (`cargo run --release -p ponko_bench [-- filter]`) |
-| `examples/`, `examples/cpp/` | Rust and C++ examples |
-| `tests/`, `crates/*/tests/` | Tests, one file per area |
-| `fuzz/` | Fuzz targets for the loaders of untrusted files and packets ([fuzz/README.md](fuzz/README.md)) |
-| `book/` | The guide ([mdBook](https://rust-lang.github.io/mdBook/)) |
-
-## Making a change
-
-1. Fork the repository and create a branch (`fix/<topic>`, `docs/<topic>`, ...).
-2. Make one focused change. Add a regression test for a bug fix or a test of
-   new behavior where practical; explain any testing gap in the PR.
-3. Add or adjust nearby API comments when needed to explain the behavior.
-   Broader guide chapters, C/C++ bindings and paired examples are welcome but
-   **not required from every contributor**. Mention follow-up needs you notice;
-   maintainers will help identify and own the rest.
-4. If users will notice the change, add a changelog fragment,
-   `changelog.d/<pr-or-topic>.md`, instead of editing `CHANGELOG.md`
-   directly (see [changelog.d/README.md](changelog.d/README.md)).
-5. Run relevant checks, then open a PR to `main` describing the change and
-   what you checked. It is fine to open a draft early for feedback.
-
-### Checks: start with your change
-
-For a Rust change, format it and run the affected package or test, for example:
-
-```sh
-cargo fmt --all --check
-cargo test -p ponko_ecs --test queries  # an ECS query change
-cargo test -p ponko --test headless    # a headless simulation change
-```
-
-`cargo fmt --all` hands every target's file of the workspace to one `rustfmt`
-command; on Windows, in a checkout with a long path, that passes the
-command-line limit ("The filename or extension is too long (os error 206)").
-`python3 scripts/fmt-workspace.py --check` checks the same files in batches
-and works everywhere; the format check in `scripts/checks.yml` uses it.
-
-On a card with little memory the renderer's GPU tests can fail with `Not enough memory left`: add `-- --test-threads=4` (see [A card with little memory](book/src/render-tests.md#a-card-with-little-memory)).
-
-For guide changes, run `mdbook build book` if mdBook is available. You do not
-need a C++ toolchain for an unrelated Rust change. Report checks you could not
-run; maintainers cover the broader matrix before merging.
-
-### Local checks
-
-Run the applicable checks from [scripts/checks.yml](scripts/checks.yml) with
-Python 3.10 or later, Git, and Bash. On Windows use Git for Windows and start
-from a Visual Studio Developer PowerShell with the C++ linker and SDK on
-`PATH`. Replace `python3` with `py -3` if needed. The runner uses the same
-Python interpreter for its steps. Install the required Rust toolchains and
-tools before the run.
-
-```sh
-python3 scripts/run-checks.py --list
-python3 scripts/run-checks.py --quick
-python3 scripts/run-checks.py --job test --job test-features
-python3 scripts/run-checks.py --tag lint
-python3 scripts/run-checks.py
-```
-
-`--job` and `--tag` can each be repeated. Combine them to select jobs that
-match both filters. `--list` prints the plan with prerequisites and skip
-reasons. The default runs the current OS lanes without opening windows.
-On a test machine with a display, add `--include-windowed` to include packaged
-game playback and other steps tagged `windowed`. Offscreen GPU tests can run
-in either mode.
-
-Setup actions (tool installers, system packages, caches and artifact uploads)
-are for machine provisioning. Use the versions and requirements in the
-inventory. On Linux install the ALSA and udev development headers before any
-native builds and AT-SPI plus D-Bus for the Linux accessibility lane. For the
-Linux browser job, install the pinned wasm-bindgen
-CLI, run `npm ci --prefix web/smoke`, and provision the Playwright browsers and
-OS dependencies listed in that job. The C++ browser check requires
-`WASI_SDK_PATH`. The WebKit audio checks expect a PulseAudio null sink on the
-test host.
-
-The runner prints each step's result and time and writes `results.json` and
-`summary.txt` to `target/check-results/` by default. Use `--out DIRECTORY` to
-save a report elsewhere. Reports include the checked revision, time, OS,
-Rust versions, skipped checks, and adapter and driver details when offscreen
-tests report them. The JSON also includes failed step output. Exit code 1
-means a check failed, and exit code 2 means a usage error or zero checks ran.
-The [integration instructions](AGENTS.md#integration-checks) describe when
-maintainers need additional checks.
-
-#### Checks that need a person
-
-Some checks need a real machine, display or device. [scripts/checklists/](scripts/checklists/README.md)
-has a checklist and record sheet for each (hardware checks per OS, a
-newcomer test, input methods and screen readers, low-end hardware and the
-Steam Deck, the whole list on Linux), with scripts that make the runs quick.
-If you have the hardware, pick one and report on its issue.
-
-#### Nightly runs on maintainer machines
-
-Use a dedicated `main` checkout on each macOS, Windows, and Linux test
-machine. Provision the tools under the scheduler account and configure
-authenticated `gh` with permission to manage issues in this repository.
-Schedule one invocation per OS and keep the report directories outside the
-checkout.
-
-`--publish DIRECTORY` replaces the OS's latest status files in that directory
-after each completed run. The file pairs are `macos.json` and `macos.md`,
-`windows.json` and `windows.md`, and `linux.json` and `linux.md`. Copy these
-files to the website's static assets for its status page. Use the Markdown
-table for the README or link to the status page from the README. Use the
-UTC completion time to show the age of the result. Keep the raw
-`results.json` and `summary.txt` in the machine's private report directory.
-
-`python3 scripts/nightly-issue.py /path/to/results.json` previews the issue
-action using the scheduler account's GitHub access. Add `--apply` to
-create or update the open issue titled “Nightly checks failing on <OS>”,
-or close it when a run passes. A run that executes zero checks publishes
-an incomplete status and leaves issues alone. Use full nightly reports for
-issue updates.
-
-On macOS and Linux, point the scheduler at a Bash script like this one.
-It sends a fresh report to the issue updater even when a check fails.
-
-```sh
-#!/usr/bin/env bash
-set -euo pipefail
-cd /path/to/ponko
-test "$(git branch --show-current)" = main
-dirty=$(git status --porcelain)
-test -z "$dirty"
-git pull --ff-only origin main
-
-python=/path/to/python3
-reports=/path/to/private/ponko-latest
-status=/path/to/public-status-staging
-rm -f "$reports/results.json"
-result=0
-"$python" scripts/run-checks.py --out "$reports" --publish "$status" || result=$?
-if test -f "$reports/results.json"; then
-  "$python" scripts/nightly-issue.py "$reports/results.json" --apply
-fi
-exit "$result"
-```
-
-On Windows, use a wrapper that initializes the Visual Studio developer
-environment, then runs a PowerShell script like this one.
-
-```powershell
-$ErrorActionPreference = 'Stop'
-$PSNativeCommandUseErrorActionPreference = $false
-Set-Location 'C:/path/to/ponko'
-$branch = git branch --show-current
-if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { exit 2 }
-$dirty = git status --porcelain
-if ($LASTEXITCODE -ne 0 -or $dirty) { exit 2 }
-git pull --ff-only origin main
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-$reports = 'C:/path/to/private/ponko-latest'
-$status = 'C:/path/to/public-status-staging'
-$report = Join-Path $reports 'results.json'
-if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
-py -3 scripts/run-checks.py --out $reports --publish $status
-$result = $LASTEXITCODE
-if (Test-Path -LiteralPath $report) {
-  py -3 scripts/nightly-issue.py $report --apply
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-}
-exit $result
-```
-
-Configure the scheduler with the needed tool `PATH` and keep stdout and
-stderr to diagnose checkout or reporting errors. On a dedicated test host
-with an active graphical session, add `--include-windowed` to the runner
-invocation to include the windowed lanes.
-
-| Scheduler | Nightly setup |
-| --- | --- |
-| macOS launchd | Create a per-user LaunchAgent in `~/Library/LaunchAgents`. Set `ProgramArguments` to the absolute Bash and script paths, `StartCalendarInterval` to hour 2 and minute 0, and `StandardOutPath` and `StandardErrorPath` to log files. Load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.ponko.checks.plist`. |
-| Linux systemd | Create a user service in `~/.config/systemd/user/ponko-checks.service` with `Type=oneshot` and `ExecStart=/bin/bash /absolute/path/to/script`. Create `ponko-checks.timer` with `OnCalendar=*-*-* 02:00:00` and `Persistent=true` in `[Timer]` and `WantedBy=timers.target` in `[Install]`. Run `systemctl --user enable --now ponko-checks.timer`. Use a system service or enable user lingering if it must run after logout. |
-| Windows Task Scheduler | Create a daily trigger at 02:00 and use the Visual Studio environment wrapper as the action. Have the wrapper pass through the PowerShell script's exit code. Select “Do not start a new instance” when an invocation overlaps another. |
-
-For the first invocation on each machine, omit `--apply` to check the
-revision, environment, skip reasons, public files, and proposed issue
-action. Enable issue updates once those match the expected schedule.
-
-### Adding or changing a cargo feature
-
-The list of checks is [scripts/checks.yml](scripts/checks.yml): a change
-breaks nothing unseen only if some line there builds it. Every cargo feature of
-every crate in the workspace needs, in checks.yml,
-
-- a **clippy** line that turns it on (a `matrix.include` entry of the `clippy`
-  job: its `scope` is the package, `args` the features),
-- a **test** line that turns it on (a step of the `test-features` job, meant
-  for Linux, macOS and Windows),
-- and, if docs.rs builds the crate with it (`[package.metadata.docs.rs]`), a
-  **doc** line (the "Docs with every public feature" step of the `docs` job).
-
-`python3 scripts/check-feature-coverage.py` reads Cargo.toml and checks.yml and
-fails for a feature without one; `--list` shows each feature's checks. A feature
-counts as on in a line when the line names it, when a feature that is on lists
-it (`image-formats` turns on `image-bmp`), when it is a default feature, or when
-a crate built together with it asks for it (cargo unifies features: building the
-workspace builds `ponko` with whatever `ponko_lobby` and `ponko_ffi` ask of it).
-The checks that go with a feature are in the same file:
-
-| What | Where in checks.yml |
-|---|---|
-| `editor`, `video`, `lobby`, `webrtc` and the others, linted and tested | `clippy` matrix; `test-features` steps "Tests, editor", "Tests, video", "Tests, lobby client and WebRTC endpoints" |
-| The C and C++ test programs against a library with `webrtc` | `native`: `--features control-env,webrtc` with `-DPONKO_WEBRTC=ON` |
-| The ECS hooks and required components under Miri (Tree Borrows) | `miri`, "par_for_each, tree borrows" |
-| The engine's unsafe code under Miri (the `miri` tests of `scripts/unsafe-inventory.txt`) | `miri`, "engine unsafe code, tree borrows" |
-| The C and C++ test programs and the `ponko_ffi` tests under AddressSanitizer and UndefinedBehaviorSanitizer | `sanitizers` |
-| The threaded web build (with `-D warnings`, and its self-test `--case warning`), its fallback without the isolation headers, and its controllers (`--case gamepads`) | `web-smoke`: `web/smoke/threads.mjs` |
-| Browser multiplayer and replication | `web-smoke`: `web/smoke/multiplayer.mjs`, `web/smoke/replication.mjs` |
-
-Only if a feature has nothing a cargo test can check, put it in
-`scripts/feature-checks.txt` with a reason that names what checks it instead.
-The script also fails for an entry that is not needed any more, so the list
-only shrinks. The same file lists the browser runners (`web/smoke`,
-`web/gallery`) that checks.yml doesn't run; a new runner without a step in
-checks.yml fails the check.
-
-Run it, with the selftest of its parsing, before a change to Cargo.toml's
-features or to checks.yml:
-
-```sh
-python3 scripts/check-feature-coverage.py
-python3 scripts/check-feature-coverage.py --selftest
-```
-
-### Unsafe code and sanitizers
-
-Every `unsafe` block needs a test that runs it. Outside the ECS (which has
-its own Miri commands, in AGENTS.md) the list is
-[scripts/unsafe-inventory.txt](scripts/unsafe-inventory.txt): each item with
-unsafe code (`function`, `Type::method`, `impl Send for Type`), the test that
-runs it, and whether that test runs under Miri or why not (a GPU, a C
-library, signals or sockets, another platform, or `window`: a check a person
-runs in a real window). The benchmark binary `crates/ponko_bench` is
-covered too. The C API crate's helpers need no line when a tested C function
-reaches them: the script finds that test.
-
-Checks that need a person (a real window) are listed in the guide's "Unsafe
-code" section; run them when you touch the code they cover. For the
-accessibility adapter on the engine's window:
-
-```sh
-cargo test --features accessibility --test ui_access_window -- --ignored
-```
-
-```sh
-python3 scripts/check-unsafe.py            # every unsafe item has a test
-python3 scripts/check-unsafe.py --list     # each item and its test
-python3 scripts/check-ffi-ownership.py     # every C pointer's owner is said
-```
-
-`check-unsafe.py` fails for unsafe code without a line, and prints the line to
-add; write the test first. If you touched unsafe code outside the ECS, run its
-Miri tests, one command per test target (`--miri` prints them from the list):
-
-```sh
-python3 scripts/check-unsafe.py --miri | while read -r line; do
-  MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" bash -c "$line" || break
-done
-rm -rf target/miri
-```
-
-Every C function says who owns each pointer it takes or returns. Most follow
-the rules at the top of `include/ponko.h` ("Pointers and who owns them"),
-decided by the parameter's type: a `Ponko*` object is borrowed for the call,
-a `const` pointer is read during the call only, any other pointer is the
-caller's memory the call writes. A returned pointer, a `T **out`, callback
-user data and an object the function takes over need an `Ownership:`
-paragraph in the function's doc comment; `check-ffi-ownership.py` fails for a
-function without one and says what to write.
-
-If you touched `crates/ponko_ffi`, `include/` or `examples/cpp`, run the C
-API under AddressSanitizer and UndefinedBehaviorSanitizer (checked on macOS
-on Apple silicon; on Linux use the `x86_64-unknown-linux-gnu` target). The
-C and C++ test programs, built with both sanitizers against a debug library:
-
-```sh
-cargo build -p ponko_ffi --features control-env,webrtc
-cmake -S examples/cpp -B target/native-asan -DCMAKE_BUILD_TYPE=Debug \
-  -DPONKO_SANITIZE=ON -DPONKO_WEBRTC=ON -DPONKO_LIBRARY_DIR="$PWD/target/debug"
-cmake --build target/native-asan
-ASAN_OPTIONS=detect_container_overflow=0 UBSAN_OPTIONS=print_stacktrace=1 \
-  ctest --test-dir target/native-asan --output-on-failure
-```
-
-and the `ponko_ffi` tests, the Rust side built with AddressSanitizer (Rust
-has no separate UB sanitizer; its UB checks are Miri's):
-
-```sh
-RUSTFLAGS="-Zsanitizer=address" RUSTDOCFLAGS="-Zsanitizer=address" \
-  cargo +nightly test -p ponko_ffi --target aarch64-apple-darwin --tests
-rm -rf target/native-asan target/aarch64-apple-darwin
-```
-
-### Performance changes
-
-Claims need numbers: measure in release builds before and after, and put
-both in the pull request. Avoid per-frame heap allocations on hot paths.
-
-The `ponko_bench` README, "Tracking results over time", describes the
-tracked workloads: the instruction counts of a few small workloads (ECS
-iteration, queries, spawn/despawn, a sim tick, 3D frame collection), which a
-pull request that touches the engine, the ECS or the benchmarks compares with
-its base. Nothing measures them for you: run them locally and put the
-comparison in the pull request. A slower benchmark doesn't block the merge,
-but explain it in the pull request, or fix it. To compare, run
-`bench_track compare` on repeated runs of each side (a single run has no spread, so its threshold
-is only the floor); instruction counts need valgrind, so on macOS compare
-wall-clock runs of `ponko_bench`.
-
-### Breaking changes: the migration note
-
-[STABILITY.md](STABILITY.md) promises that every break comes with what to use
-instead. A change that breaks code written against the last release (a
-renamed, moved or removed item, a changed signature, behaviour or default; the
-semver check below finds some of them, you and the reviewer the rest) carries
-its migration note in its own pull request:
-
-- A changelog fragment with a `### Breaking changes` section
-  ([changelog.d/README.md](changelog.d/README.md)). Each entry says **what
-  changed**, **what to write instead**, and shows the code **before and
-  after**:
-
-  ````md
-  ### Breaking changes
-  - `Foo::bar` takes a `Baz` now.
-    Instead: wrap the argument, `Baz::new(x)`.
-    Before:
-    ```rust
-    foo.bar(x);
-    ```
-    After:
-    ```rust
-    foo.bar(Baz::new(x));
-    ```
-  ````
-
-  `python3 scripts/changelog.py --check` refuses an entry that
-  lacks any of the three.
-- The **`breaking` label** on the pull request. The two go together, in both
-  directions: the Semver check fails a pull request that breaks the API
-  without the label and a fragment, and fails one that has the label but no
-  such fragment (the tool does not see every break, and a label is a promise
-  of a migration note). Run the check again with `--breaking` once the
-  label is on.
-- **Deprecate first where it is cheap**, as STABILITY.md's "Releases" says: a
-  replaced item stays for one minor as `#[deprecated(note = "use X")]` (Rust)
-  or with a note in the header (C), pointing at its replacement, and the next
-  minor removes it. It is cheap when the old item can forward to the new one
-  without keeping a second implementation alive: a rename, a moved item, a
-  method that became a builder step. It is not cheap when the old and new
-  behaviour can't coexist (a changed default, a changed data layout, a type
-  that gained a required field): remove it at once, with the entry above.
-  Deprecating is itself a change that goes under `### Deprecated`, not
-  `Breaking changes`, and names the replacement too. The removal, a minor
-  later, is the change that gets the `Breaking changes` entry.
-
-At release time `scripts/changelog.py --version X.Y.Z` folds the entries into
-the **Breaking changes** block of the CHANGELOG (the short form: what changed
-and what to write instead, which is also the GitHub release's notes) and writes
-the same entries, with their snippets, to `book/src/migrating-to-X.Y.md`, which
-it lists in `book/src/SUMMARY.md`. Nobody writes the chapter by hand. See
-[Releasing](#releasing).
-
-### API snapshots
-
-The `api/` folder holds a generated listing of the public API of every
-published crate, one item per line, made with
-[cargo-public-api](https://github.com/cargo-public-api/cargo-public-api). The
-**API snapshots** check (`python3 scripts/api-snapshots.py check`) regenerates
-it and fails when it differs from the
-committed files, so a pull request that adds, renames, widens or removes a
-public item shows it as a diff, and the reviewer decides whether the surface
-is meant. 1.0 needs a deliberate surface; this is how it stays one. It is a
-quick check (no tests): `update` took 1.9 minutes on a busy laptop with a warm
-dependency build, and a rerun is under half a minute.
-
-**After changing public API, run one command and commit the result:**
-
-```sh
-python3 scripts/api-snapshots.py update
-git add api
-```
-
-- **What is listed.** `ponko`, `ponko_ecs`, `ponko_ffi`, `ponko_mcp` and
-  `ponko_unity` (not proc-macro or binary-only crates), as
-  `api/<crate>/<set>.txt`: `default` (default features), `no-default-features`
-  (for `ponko`: headless), `docs-rs` (the features docs.rs builds: all the
-  public ones, `3d` included) and, for `ponko`, `3d` (the defaults plus `3d`).
-  A set that lists the same as `default` has no file. Blanket and auto-trait
-  impls are left out as noise; derived impls (`Clone`, `Debug`) stay.
-- **Experimental items** (`scripts/experimental-api.txt`, STABILITY.md
-  "Maturity levels") are listed apart, in `api/<crate>/experimental.txt`,
-  from every set: the other files are exactly the API the versions cover. A
-  change to them still shows up in the diff. Adding an item to the list (or
-  taking one off) moves its lines on the next `update`;
-  `python3 scripts/experimental-api.py check` says when the list, the guide's
-  levels, `api/` and the C header disagree.
-- **Reading a failure.** The output shows the diff and the command above. If
-  you cannot run the tool, say so in the pull request and a maintainer
-  regenerates the folder. A diff you did
-  not intend means something became public by accident (`pub` instead of
-  `pub(crate)`, a `pub use` that pulls in more than it should): fix the code,
-  not the snapshot.
-- **Merge conflicts in `api/`** (two pull requests added public API): do not
-  merge the files by hand. Resolve the source, then run the command again.
-- **Tools.** The script pins `cargo-public-api` and the nightly toolchain it
-  needs together (`TOOL_VERSION` and `NIGHTLY`), because the tool reads rustdoc
-  JSON, whose format changes with every nightly; `pins` prints them, so there
-  is one place to change them. The script tells you the
-  install commands if something is missing: `cargo install --locked
-  cargo-public-api --version <pin>` and `rustup toolchain install <nightly>
-  --profile minimal` (the nightly does not become your default). It also
-  needs the audio and udev headers on Linux, like every build here. The
-  listing is the one for x86_64 Linux: on macOS the script builds
-  for `x86_64-apple-darwin` (same CPU types, no Linux libraries needed; it
-  tells you the one `rustup target add` command) and drops the few items that
-  exist only on macOS, so `update` gives the same text as on Linux. Another
-  host (Windows) needs a maintainer on Linux or macOS to regenerate them. To move to
-  a newer nightly, pick a tool release whose README supports it, change both
-  pins, run `update`, and review the diff: it should only change where the
-  tool's changelog says it does.
-- **Relation to the Semver check** (below). The snapshot shows *every*
-  change to the public API, growth included, and compares with the commit
-  you are based on. Semver shows only what *breaks* code that compiled against
-  the last crates.io release, and compares with that release. A new function
-  fails the snapshot check (update the snapshot) and passes the semver check; a
-  removed function fails both (update the snapshot, and add the `breaking`
-  label and fragment, or undo the break). The snapshot cannot say whether a
-  change breaks anything: that is what the semver check and the reviewer do with
-  the diff.
-
-### Semver checks
-
-The **Semver checks** (`python3 scripts/semver-checks.py run`, the `semver`
-job of [scripts/checks.yml](scripts/checks.yml)) compare the public API of every published
-crate with its last release on crates.io, using
-[cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks), and
-reports what a change breaks. [STABILITY.md](STABILITY.md) promises that a
-patch release (0.1.x) keeps code compiling that compiled against 0.1.0; this is
-the check behind that promise. It is a quick check (a few minutes); run it
-before merging a change to public API.
-
-- **What is checked.** `ponko`, `ponko_ecs`, `ponko_ffi`, `ponko_mcp` and
-  `ponko_unity`, each with the features docs.rs builds for it
-  (`[package.metadata.docs.rs]` in its Cargo.toml; not `hotpatch` or
-  `bench-internals`, which are not API). A new publishable crate is picked up
-  by itself. `ponko_macros` is listed as not checked: the tool reads no API
-  from a proc-macro crate.
-- **Experimental items** don't count. A crate whose every `Failed in:` line
-  names an item of `scripts/experimental-api.txt` (or one of its cargo
-  features) is reported as `experimental`, not as a break, on any branch: they
-  are outside the promise (STABILITY.md, "Unstable"). A name the tool prints
-  that a covered item shares (a short type name) never excuses a failure.
-- **What fails.** On a `release-*` branch (patch releases) and on a pull request
-  into one, every break fails the check. On `main`, breaks pile up until the next
-  minor release, so the comparison with crates.io only reports them. What
-  fails a pull request is a break *it* adds (found by comparing with the commit
-  it is based on), unless it carries the **`breaking` label** *and* a
-  [changelog fragment](changelog.d/README.md) with a `### Breaking changes`
-  entry (what changed, what to write instead, before and after code). Both
-  are needed: the label tells the reviewer, the fragment becomes the migration
-  chapter. The check also fails the other way round: the label without such a
-  fragment, whether or not the tool found a break.
-
-**Reading a failure.** Read the table at the end of the output (or the
-section "before this change: <crate>"). Each failed lint has a name
-(`inherent_method_missing`), a description, a link to the Cargo reference,
-and a `Failed in:` list of items with the file they were in at the last release.
-
-**Acting on it:**
-
-1. *Undo the break* if it was not meant: keep the old item next to the new
-   one and mark it `#[deprecated(note = "use ...")]`, or make the type
-   `#[non_exhaustive]` before it grows. On a release branch this is the only way.
-2. *Announce it* if it is meant (on `main` only): add the fragment, add the
-   `breaking` label, and **run the check again with `--breaking`**.
-   Maintainers add the label; a contributor can ask for it in the pull request.
-3. *Tool errors* (the check could not build a crate, or the tool does not read
-   this Rust version) are not breaks and no label excuses them. See the note at
-   the top of the `semver` job in checks.yml about the pinned tool and Rust
-   versions.
-
-To run it, with the pinned tool (`cargo install --locked
-cargo-semver-checks --version 0.51.0`; it needs the Linux audio and udev headers
-the other builds need), after `git fetch origin`:
-
-```sh
-python3 scripts/semver-checks.py run                      # a change for main
-python3 scripts/semver-checks.py run --breaking           # one with the `breaking` label
-python3 scripts/semver-checks.py run --base release-0.1   # one for a release branch
-```
-
-It compares with `git merge-base origin/<base> HEAD`; the output says what a
-failing change would need. For one crate,
-`cargo semver-checks check-release -p ponko_unity --default-features --release-type minor`
-shows the lints directly.
-
-**What it does not catch.** The tool compares the public API as rustdoc
-describes it, with a fixed list of lints (`cargo semver-checks check-release
---list`); a break no lint describes passes. Know these gaps when you review:
-
-- Behaviour with an unchanged signature: a different result, panic, default
-  value, ordering, timing, or determinism; what a saved world or a
-  save file contains; the fields of the control endpoint and MCP messages.
-- Many type changes in fields, parameters and return values, and tightened
-  generic bounds, are covered only where a lint exists for them.
-- Features outside the checked set (`hotpatch`, `bench-internals`) and
-  platform-specific API on other targets: only the Linux target with the
-  docs.rs features is built.
-- The C and C++ headers (`include/`) and the layout of `#[repr(C)]` types as
-  C sees them: the tool reads the Rust side of `ponko_ffi` only. The C ABI tests
-  and `scripts/check-ffi-coverage.py` are what guard the header.
-- Anything behind `#[doc(hidden)]` (such as `ponko::__ffi`), which is
-  unstable by definition, and a new crate's first release (nothing to compare).
-- Proc-macro crates (`ponko_macros`): the names and attributes of the derives
-  are not compared.
-- Dependencies: when a public type from `glam`, `wgpu` or another crate in our
-  API changes major version, our API breaks without a lint saying so.
-
-## Architecture proposals
-
-Read [PROJECT_VISION.md](PROJECT_VISION.md), [ARCHITECTURE.md](ARCHITECTURE.md),
-[ROADMAP.md](ROADMAP.md) and [STABILITY.md](STABILITY.md) for the affected work.
-Discuss major changes in an issue before implementing them. Describe the problem,
-a small proposed interface, ownership and dependency boundaries, alternatives,
-compatibility/platform effects and validation plan. Explain why a new abstraction,
-crate or dependency is better than a smaller internal change.
-
-The aim is modular internals with an integrated public experience. Keep ordinary
-`Game`/`Ctx` workflows usable, preserve optional features and headless operation,
-and avoid unrelated rewrites. The proposed parallel system scheduler remains
-optional; it needs sound access boundaries and explicit ordering/determinism rules,
-never concurrent unrestricted mutable access to `Ctx` or `World`.
-
-## Reproductions and GPU evidence
-
-A useful bug report includes a minimal runnable example or failing test, commands,
-engine revision, Rust version, feature flags, expected and actual results, and logs.
-For nondeterministic failures, include the seed or input sequence when available.
-For rendering, add OS, GPU/driver/backend, resolution and quality settings, plus
-screenshots when safe to share. Never attach private project assets or secrets.
-
-For GPU changes, run relevant offscreen/visual tests and inspect comparable
-before/after images. Exercise capability fallbacks and resize/history behavior
-when affected. Record skipped tests and unsupported adapters; a headless logic
-test does not establish rendering correctness. If hardware is unavailable, say
-which validation is missing in the PR so reviewers can help.
-
-The offscreen GPU suites live in `src/render/*_render_test.rs`. Their shared
-conventions (getting the adapter with a logged skip reason, tolerance-based image
-comparison and semantic pixel checks, reference images with metadata under
-`tests/fixtures/render/`) are documented in `src/render/render_test_support.rs`.
-Run them with `cargo test -p ponko --lib --features 3d render_test -- --nocapture`
-and report which ran and which logged `render test SKIPPED`. Reference images are
-only rewritten with `PONKO_UPDATE_REFERENCES=1` (refused when the `CI`
-environment variable is set); a regenerated
-reference needs the before/after images in the PR.
-
-Performance PRs should record the revision, commands, toolchain, features, hardware,
-workload, warm-up and comparable before/after results. Include CPU and GPU times,
-frame-time percentiles, memory and allocations where relevant, and identify metrics
-that could not be collected. Verify correctness independently; never generalize
-one benchmark into an overall engine ranking.
-
-## Dependency audit
-
-[`deny.toml`](deny.toml) holds the policy that [cargo-deny](https://github.com/EmbarkStudios/cargo-deny)
-checks: allowed licenses, security advisories (the RustSec database), banned
-and duplicate crates, and allowed sources (crates.io only). Run it on any
-pull request that changes `Cargo.toml`, `Cargo.lock` or `deny.toml`;
-maintainers also run it on `main` from time to time (and before a release),
-since new advisories appear without any change here:
-
-```sh
-cargo install --locked cargo-deny --version 0.20.2   # once; the pinned version
-cargo deny --locked check -D warnings
-```
-
-When it fails, the output names the crate and the dependency chain that
-brought it in:
-
-- **A license is not allowed** (`licenses`). Prefer a dependency with an
-  allowed license. The list in `deny.toml` is what the C library's
-  third-party notices can carry; adding a license is a maintainer decision:
-  say in the pull request why it is acceptable for the release archives.
-  A crate that declares no license is refused by the notices too.
-- **An advisory** (`advisories`: vulnerability, unmaintained, unsound or
-  yanked). Update the dependency, with the smallest bump that fixes it
-  (`cargo update -p <crate>`; `cargo tree -i <crate>` shows who needs it), and
-  run the full checks. If nothing fixed exists, add an `ignore` entry to
-  `deny.toml` with the advisory id and a `reason`: how we reach the crate and
-  why that is acceptable, and what ends the exception. Never ignore without a
-  reason.
-- **A duplicate version** (`bans`). Align versions when you can (a newer
-  release of the parent, or `cargo update`). A duplicate a dependency we don't
-  control forces gets a `skip` entry with a `reason` naming the dependency
-  that needs the old version. Don't skip a duplicate caused by our own
-  requirements: update those.
-- **A banned crate or a source that is not crates.io.** Both are deliberate:
-  the release archives must not need a system TLS stack, and releases build
-  from crates.io alone. Change the policy only with a maintainer's agreement.
-- **A stale exception** (a warning, an error with `-D warnings`): the
-  `skip` or `ignore` entry matches nothing any more. Delete it.
-
-A new advisory found on `main` is handled the same way: fix, or ignore with a
-reason, in a pull request.
-
-## Fuzzing
-
-The loaders that read data a game doesn't control (scenes, prefabs, glTF,
-the Unity importer's readers, action maps, asset packs, network packets)
-have fuzz targets in [`fuzz/`](fuzz/README.md). When you change one of
-those loaders, run its target for a few minutes (nightly Rust and
-cargo-fuzz):
-
-```sh
-fuzz/seed-corpus.sh
-fuzz/run-all.sh 300 scene   # five minutes of the scene target
-```
-
-A crash, hang or huge allocation it finds is a bug in the loader: fix it
-there and add a regression test next to the loader's tests. Maintainers run
-every target from time to time on `main` (`fuzz/run-all.sh` with no
-arguments uses the seconds in `fuzz/targets.txt`) and open an issue,
-"Fuzzing: `<target>` (`<kind>`)", for what it finds.
+| Docs only (a typo, a README, a guide page) | `mdbook build book` for a guide page; `python3 scripts/check-book-snippets.py` if it has Rust code |
+| A Rust bug fix or feature | `cargo fmt --all --check`, `cargo clippy -p <crate> --all-targets -- -D warnings`, and the tests of the crate you changed (`cargo test -p <crate> --test <file>`), with a new test for the fix |
+| A public API change | The Rust row, then `python3 scripts/api-snapshots.py update` and commit `api/`. A break also needs a migration note ([MAINTAINING.md](MAINTAINING.md#breaking-changes-the-migration-note)) |
+| A cargo feature, or `Cargo.toml` dependencies | [Adding a cargo feature](book/src/contributing.md#adding-a-cargo-feature); for dependencies, `cargo deny` ([Dependency audit](MAINTAINING.md#dependency-audit)) |
+| `unsafe` code, the C API, the C++ wrapper | [Unsafe code](book/src/contributing.md#unsafe-code): the inventory, Miri and the sanitizers; [Testing the C API](book/src/contributing.md#testing-the-c-api) |
+| The renderer | The offscreen GPU tests, with the adapter they ran on and before/after images ([Reproductions and GPU evidence](book/src/contributing.md#reproductions-and-gpu-evidence)) |
+| Performance | Release-build numbers before and after ([Performance changes](book/src/contributing.md#performance-changes)) |
+
+`python3 scripts/run-checks.py --list` shows the whole list of checks and
+which can run on your machine. The guide's
+[contributor chapter](book/src/contributing.md) explains each check, and
+what to do when it fails.
+
+<a id="questions-bugs-and-ideas"></a>
+## Getting help
+
+Ask in [GitHub Discussions](https://github.com/ponkoengine/ponko/discussions),
+so the answer stays findable for the next person:
+[Q&A](https://github.com/ponkoengine/ponko/discussions/categories/q-a) for
+questions, [Ideas](https://github.com/ponkoengine/ponko/discussions/categories/ideas)
+for features you want to agree on before you build them, and
+[Show and tell](https://github.com/ponkoengine/ponko/discussions/categories/show-and-tell)
+for what you made. Bugs go in an
+[issue](https://github.com/ponkoengine/ponko/issues/new), with the smallest
+code that shows the problem, your OS and GPU. Security problems go to
+[SECURITY.md](SECURITY.md), never to a public issue. Decisions are recorded on
+GitHub, in the issue or pull request that raised them.
+
+## How fast we reply
+
+A new issue or a pull request from outside gets a first reply within three
+days, a pull request gets a review within a week, and a new discussion gets
+an answer within a week. One person maintains Ponko today, so a reply can
+slip: if a week passes with no answer, ping on the issue or pull request.
+
+## Changelog fragments
+
+If users will notice your change, add a file `changelog.d/<pr-or-topic>.md`
+with a `### Added`, `### Changed` or `### Fixed` section of `- ` bullets.
+Do not edit `CHANGELOG.md`: the release folds the fragments in.
+[changelog.d/README.md](changelog.d/README.md) has the format, and what a
+breaking change needs.
 
 ## Using coding agents
 
-Coding agents are welcome under the same contribution rules. You remain responsible
-for understanding and reviewing their changes, verifying APIs and dependencies,
-running the required checks, and keeping the change scoped. Use existing MCP tools
-for runtime inspection, screenshots, stepping or profiling when helpful; retain
-reproducible commands/tests and explain what the evidence establishes. Do not treat
-agent narration as proof. The agent acceptance suite
-(`cargo test -p ponko_mcp --test agent_suite`; "The agent acceptance suite" in
-`book/src/agents.md`) checks that agents can still finish real tasks with the MCP
-tools: a tool change that breaks one of its scripted solutions fails it. Report incomplete work, test skips and platform limitations,
-and distinguish implemented behavior from proposals. Keep private code and assets
-out of public submissions and external services.
+You may use coding agents. You answer for what you submit, as if you had
+typed it yourself:
 
-## Releasing
+- read and understand every line, and keep the change to one focused topic;
+- check that the APIs and dependencies it uses exist and do what it says;
+- run the checks yourself, and report what failed or was skipped;
+- treat what the agent says it did as a claim, not as proof;
+- keep private code, assets and secrets out of the pull request and out of
+  the services the agent sends them to.
 
-For maintainers. A release is a version tag, and a maintainer builds and
-publishes it from that tag on their own machine, so the tag, the crates on
-crates.io and the CHANGELOG section always come from one commit. There is no
-release service: the steps below are the whole procedure, written so a second
-maintainer can do a release from them alone ([GOVERNANCE.md](GOVERNANCE.md#continuity)
-says why that matters and what is still missing). There are
-three kinds of tag, all in the steps below: a release from `main`
-(`v0.2.0`), a release candidate before a minor (`v0.2.0-rc.1`, see
-[Release candidates](#release-candidates)), and a patch release from a
-release branch (`v0.1.1` on `release-0.1`, see
-[Patch releases and backports](#patch-releases-and-backports)).
-[scripts/release-0.2.md](scripts/release-0.2.md) is the same procedure as
-one list of commands for the 0.2 cut (rc.1, a week, 0.2.0).
+Reviewers review the change, not the tool.
+[AGENTS.md](AGENTS.md) has the rules agents in this repository follow.
 
-1. Fold the fragments in: `python3 scripts/changelog.py --version X.Y.Z`
-   (`--dry-run` shows the result first). If any fragment breaks the API, this
-   also writes the migration chapter, `book/src/migrating-to-X.Y.md` (named
-   after the minor: `migrating-to-0.2.md` for 0.2.0 and its candidates), from
-   the same entries and lists it in `book/src/SUMMARY.md`; read it, then check
-   the book (`mdbook build book`). The entries are grouped by area (`--areas`
-   lists them). For a minor, `python3 scripts/changelog.py --notes X.Y.Z`
-   regenerates the counts and the breaking list of the release page,
-   `book/src/release-X.Y.md`, below its hand-written story, which the fold
-   copies to the top of the CHANGELOG section; `python3 scripts/maturity.py
-   --write` adds the new chapters to the maturity list. A patch release may
-   not carry breaking entries. In `CHANGELOG.md`,
-   add a fresh empty `## [Unreleased]` heading above the folded content and
-   rename the folded one to `## [X.Y.Z] - YYYY-MM-DD`; point the
-   `[Unreleased]` link at `compare/vX.Y.Z...HEAD` and add `[X.Y.Z]` beside it.
-   The section becomes the GitHub release's notes, which hold at most
-   125,000 characters: a longer section is cut after its story and breaking
-   changes, with a link to the rest (`release-check.py notes`).
-2. `python3 scripts/release-check.py bump X.Y.Z` does this step and lists the
-   files it changed (`--dry-run` first); then `cargo update --workspace`.
-   Set `version = "X.Y.Z"` in the root `Cargo.toml` and in every published
-   `crates/*/Cargo.toml` (`ponko_bench` is `publish = false`), including the
-   `version = "..."` requirements the crates put on each other, and refresh
-   `Cargo.lock` (`cargo check --workspace`).
-   Also update the dependency lines the guide and the project templates
-   show (`ponko = "X.Y"` in `book/src/getting-started.md`, both tutorials and
-   `crates/ponko_cli/templates/*/Cargo.toml.liquid`); the check in step 3 names
-   any that is left. The "Which version?" note under every guide title needs no
-   edit: `scripts/guide-note.py` reads the version from the root `Cargo.toml`
-   and counts the fragments left in `changelog.d/`, so once this step is merged
-   the guide says it documents exactly that release.
-3. `python3 scripts/release-check.py check vX.Y.Z` lists what still disagrees
-   (it does not need the tag to exist), and `cargo publish --workspace
-   --dry-run` packages and builds every crate the way crates.io will. Re-run
-   the agent acceptance suite (`cargo run -p ponko_mcp --example agent_suite
-   -- replay`; it is also part of `cargo test --workspace`) and, for a minor,
-   try a real agent on it ("The agent acceptance suite" in the guide's agents
-   chapter) and put the scores in the pull request.
+## Where things moved
 
-   For every release, including candidates and patches, run the
-   [workspace coverage measurement](book/src/test-coverage.md) on the
-   release revision. Record the executed and mapped line counts, coverage
-   percentage, OS, GPU adapter and Rust toolchain in the release notes.
-   Coverage is recorded without a percentage gate.
+This file used to hold the whole reference. The parts moved here:
 
-   For a minor release (and its first candidate), record the wall-clock
-   baseline on the named benchmark machine, idle, and add it to the pull
-   request:
+| Old section | Now in |
+|---|---|
+| <a id="repository-layout"></a>Repository layout | [Contributor chapter](book/src/contributing.md#repository-layout) |
+| <a id="local-checks"></a><a id="checks-that-need-a-person"></a>Local checks, checks that need a person | [Running local checks](book/src/contributing.md#running-local-checks) |
+| <a id="adding-or-changing-a-cargo-feature"></a>Adding or changing a cargo feature | [Adding a cargo feature](book/src/contributing.md#adding-a-cargo-feature) |
+| <a id="unsafe-code-and-sanitizers"></a>Unsafe code and sanitizers | [Unsafe code](book/src/contributing.md#unsafe-code) |
+| <a id="performance-changes"></a>Performance changes | [Performance changes](book/src/contributing.md#performance-changes) |
+| <a id="architecture-proposals"></a>Architecture proposals | [Architecture proposals](book/src/contributing.md#architecture-proposals) |
+| <a id="reproductions-and-gpu-evidence"></a>Reproductions and GPU evidence | [Reproductions and GPU evidence](book/src/contributing.md#reproductions-and-gpu-evidence) |
+| <a id="fuzzing"></a>Fuzzing | [Fuzzing](book/src/contributing.md#fuzzing) |
+| <a id="breaking-changes-the-migration-note"></a>Breaking changes: the migration note | [MAINTAINING.md](MAINTAINING.md#breaking-changes-the-migration-note) |
+| <a id="api-snapshots"></a>API snapshots | [MAINTAINING.md](MAINTAINING.md#api-snapshots) |
+| <a id="semver-checks"></a>Semver checks | [MAINTAINING.md](MAINTAINING.md#semver-checks) |
+| <a id="dependency-audit"></a>Dependency audit | [MAINTAINING.md](MAINTAINING.md#dependency-audit) |
+| <a id="nightly-runs-on-maintainer-machines"></a>Nightly runs on maintainer machines | [MAINTAINING.md](MAINTAINING.md#nightly-runs-on-maintainer-machines) |
+| <a id="releasing"></a>Releasing | [RELEASING.md](RELEASING.md) |
+| <a id="the-c-library-archives"></a>The C library archives | [RELEASING.md](RELEASING.md#the-c-library-archives) |
+| <a id="release-time-ci"></a>Release-time CI | [RELEASING.md](RELEASING.md#release-time-ci) |
+| <a id="one-time-setup-a-maintainer-in-settings"></a>One-time setup | [RELEASING.md](RELEASING.md#one-time-setup-a-maintainer-in-settings) |
+| <a id="release-candidates"></a>Release candidates | [RELEASING.md](RELEASING.md#release-candidates) |
+| <a id="patch-releases-and-backports"></a>Patch releases and backports | [RELEASING.md](RELEASING.md#patch-releases-and-backports) |
 
-   ```sh
-   v=X.Y.Z
-   m=macos-aarch64-apple-m4-max   # what bench_track calls the machine (`<os>-<arch>-<cpu>`)
-   mkdir -p crates/ponko_bench/releases/$v/$m
-   for i in 1 2 3 4 5; do
-     PONKO_BENCH_JSON=crates/ponko_bench/releases/$v/$m/run-$i.json \
-       cargo run --release -p ponko_bench -- 'ecs/|archetypes-1024|query-build'
-   done
-   cargo run --release -p ponko_bench --bin bench_track -- \
-     compare crates/ponko_bench/releases/<previous>/$m crates/ponko_bench/releases/$v/$m
-   ```
+<a id="license"></a>
+## Conduct, governance and license
 
-   Before a minor release, run the four-hour reference-game soaks in a
-   real window on macOS, Windows and Linux. Run this from the release
-   checkout on each machine (use a fresh output directory per revision):
-
-   ```sh
-   python3 scripts/soak.py --windowed --seconds 14400 --sample 60 --warmup 600 --out target/soak-release
-   ```
-
-   Follow the [soak checklist](scripts/checklists/soak.md) and link the three
-   machines' reports and any growth issues in the release pull request.
-
-   Link the folder and the comparison in the CHANGELOG section (the release
-   notes). Run the checks of [scripts/checks.yml](scripts/checks.yml) on the
-   release branch (all of them for a minor; on every OS the matrix names:
-   macOS on the Mac, Windows x64 on the Windows PCs, Linux x86_64 on a Linux
-   machine or in a run of the [release-time CI](#release-time-ci); say in
-   the pull request which ran where), then open the pull request and merge it.
-4. Tag the merge commit on `main` (on `release-X.Y` for a patch release) and
-   push the tag:
-
-   ```sh
-   git switch main && git pull     # release-X.Y for a patch release
-   git tag -a vX.Y.Z -m "Ponko X.Y.Z" && git push origin vX.Y.Z
-   ```
-
-5. Build and publish from a clean checkout of the tag
-   (`git switch --detach vX.Y.Z`), in this order:
-
-   1. **Verify**: `python3 scripts/release-check.py check vX.Y.Z --on-branch`
-      (the tag is `vX.Y.Z` or `vX.Y.Z-rc.N` on a commit merged to `main` or
-      to `release-X.Y` of the tag's own minor, every crate is at the tag's
-      version, `CHANGELOG.md` has a non-empty `## [X.Y.Z]` section that fits
-      in a release body, a release whose section has **Breaking changes** is
-      a minor one with its migration chapter written, listed in the book's
-      summary and holding every entry, the sub-crates carry the root license
-      files and no fragment is left over). Make sure the checks passed on
-      this exact commit.
-   2. **Build the six C library archives** (see
-      [The C library archives](#the-c-library-archives)):
-      `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
-      `windows-x86_64` and `windows-arm64`, with
-      `python3 scripts/c-library.py build --target <triple>`, and check
-      each with `python3 scripts/c-library.py smoke <archive>` (`--docker`
-      for `linux-arm64`; `windows-arm64` is built by the
-      `release-matrix/windows-arm64/X.Y.Z` branch on a hosted Windows on Arm
-      runner, see below).
-   3. **Package the crates**: `cargo publish --workspace --dry-run`.
-   4. **Create the GitHub release** from the CHANGELOG section, with the
-      six archives gathered in one folder (`dist/`, from each machine's
-      `target/c-library/`):
-
-      ```sh
-      python3 scripts/release-check.py notes vX.Y.Z notes.md
-      ls dist   # ponko-vX.Y.Z-{linux,macos}-{x86_64,arm64}.tar.gz, ponko-vX.Y.Z-windows-{x86_64,arm64}.zip
-      (cd dist && shasum -a 256 ponko-vX.Y.Z-* > SHA256SUMS)
-      gh release create vX.Y.Z dist/ponko-vX.Y.Z-* dist/SHA256SUMS --title "Ponko X.Y.Z" --notes-file notes.md
-      ```
-
-      Add `--prerelease` for a candidate (`vX.Y.0-rc.N`).
-   5. **Publish the crates**: `cargo publish --workspace`, with a crates.io
-      API token of a crate owner (`cargo login`; scope it to publishing these
-      crates, and revoke or let it expire afterwards). If it stops halfway,
-      run it again: crates already published are skipped. Then check, on
-      macOS, Linux and Windows, what a new user gets from crates.io:
-      `python3 scripts/first-run.py X.Y.Z` (installs `ponko_cli`, makes and
-      tests each template against exactly that version, builds the guide's
-      first program). Linux may be the `first-run` marker of the
-      [release-time CI](#release-time-ci).
-   6. **Redeploy the website** (https://ponko.dev/, which builds the guide
-      from `main`; its own repository, `ponkoengine/ponko-website`): retry
-      its latest deployment in Cloudflare Pages, or let its next deployment
-      pick the guide up. The API reference of the release appears on docs.rs
-      by itself.
-   7. **Publish the web gallery** of the examples (see
-      `web/gallery/README.md`), for a release that is the newest version
-      (not for a candidate, nor for a patch of an older minor): build it for
-      the tag and check every page in headless Chromium, then put the folder
-      on the `gh-pages` branch, which GitHub Pages serves
-      (its address is derived from `PROJECT_URL`; there is no CI, so the
-      maintainer pushes the branch by hand, and the gallery has no domain of
-      its own):
-
-      ```sh
-      node --test web/gallery/*.test.mjs web/smoke/gallery-lib.test.mjs
-      node web/gallery/build.mjs --ref vX.Y.Z --out target/web/gallery
-      node web/smoke/gallery.mjs --dir target/web/gallery --browser chromium --backend webgl2
-      ```
-
-      Then push the branch with the commands in
-      [web/gallery/README.md](web/gallery/README.md#publishing) (one commit,
-      force-pushed), and open the address. A failed page stops only the
-      gallery, not the release.
-
-### The C library archives
-
-`scripts/c-library.py` makes each archive from the tag's checkout. It builds
-`ponko_ffi` with its default features (`cargo build --release --locked
---target <triple>`) and packs a folder `ponko-vX.Y.Z-<os>-<arch>` holding
-`include/ponko.h` and `include/ponko.hpp`, the shared and static libraries
-in `lib/` (`libponko_ffi.so` and `.a`, `libponko_ffi.dylib` and `.a`, or
-`ponko_ffi.dll`, its import library `ponko_ffi.dll.lib` and
-`ponko_ffi.lib`), `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`, and
-`THIRD-PARTY-NOTICES.txt` for every library linked into it on that target.
-It refuses a library built for the wrong CPU and gives the macOS library the
-install name `@rpath/libponko_ffi.dylib` (the linker writes the path it was
-built at). The archive goes to `target/c-library/` as `.tar.gz` (`.zip` for
-Windows). `targets` lists the six, `--dry-run` shows the commands and the
-layout, and `--help` has the rest.
-
-`smoke <archive>` unpacks it elsewhere, builds `examples/cpp` against its
-`include/` and `lib/` the way the C/C++ chapter tells users to, and runs the
-C and C++ tests with ctest. Where the programs can't run on the machine it
-only builds them, and says so. Each `--target` is a whole extra release
-build: delete `target/<triple>` once its archive is uploaded.
-
-**macOS (Apple silicon): `macos-arm64` and `macos-x86_64`.** The two are
-separate archives: the arm64 one keeps its 0.1.0 name and contents, each
-download is half the size of a universal one (about 58 MB each against
-117 MB), and each has its own third-party notices (the two targets link
-slightly different crates). Users who want a universal library join them
-with `lipo -create`.
-
-```sh
-rustup target add x86_64-apple-darwin
-python3 scripts/c-library.py build --target aarch64-apple-darwin
-python3 scripts/c-library.py build --target x86_64-apple-darwin
-python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-macos-arm64.tar.gz
-python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-macos-x86_64.tar.gz
-```
-
-The Intel programs run under Rosetta (`softwareupdate --install-rosetta`);
-without it the smoke only builds them.
-
-**Linux x86_64: `linux-x86_64`**, on the Linux machine, with
-`sudo apt install libasound2-dev libudev-dev cmake g++`:
-`python3 scripts/c-library.py build`, then `smoke` it. The library needs the
-glibc of that machine or newer.
-
-**Linux arm64: `linux-arm64`**, cross-built from the Mac (or the Linux
-machine) with zig as the linker, for glibc 2.28:
-
-```sh
-brew install zig                 # or zig from ziglang.org on Linux
-cargo install cargo-zigbuild --locked
-rustup target add aarch64-unknown-linux-gnu
-```
-
-The linker needs the target's ALSA and udev libraries. Download the arm64
-packages `libasound2`, `libasound2-dev`, `libudev1` and `libudev-dev` of a
-Debian release (packages.debian.org, "arm64", or `apt-get download
-<package>:arm64` on Debian/Ubuntu with the arm64 architecture added), then:
-
-```sh
-python3 scripts/c-library.py sysroot --out target/sysroot-arm64 <the four .deb files>
-python3 scripts/c-library.py build --target aarch64-unknown-linux-gnu --zig --sysroot target/sysroot-arm64
-python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-linux-arm64.tar.gz --zig
-```
-
-The `--zig` smoke compiles and links the C and C++ programs for arm64 with
-zig, which proves the link only. To run them, use an arm64 Linux machine
-(copy the archive there, install `cmake g++ libasound2 libudev1` and run
-`smoke` without `--zig`) or Docker, which runs arm64 Linux natively on an
-Apple silicon Mac:
-
-```sh
-python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-linux-arm64.tar.gz --docker
-```
-
-`--docker` unpacks the archive in a `rockylinux:8` container (arm64, glibc
-2.28: the floor of the archive, so a library that needs a newer glibc fails
-here), installs CMake, a newer GCC, ALSA and udev, builds `examples/cpp`
-against the archive and runs its ctest programs. The container has no GPU:
-the programs ctest runs are headless (no window, no GPU) and none is
-skipped. It needs the network and Docker running (`open -a Docker`);
-stop it afterwards and remove the image (`docker rmi rockylinux:8`). The
-`linux-x86_64` archive takes the same flag (`--image` picks another image).
-
-**Windows x64: `windows-x86_64` and `windows-arm64`**, in PowerShell, with
-Python, CMake and Visual Studio 2022 (or its Build Tools) with the "Desktop
-development with C++" workload. The arm64 archive also needs the component
-"MSVC v143 - VS 2022 C++ ARM64/ARM64EC build tools (Latest)" (Visual Studio
-Installer, Modify, Individual components; or `vs_installer.exe modify
---installPath <the Visual Studio folder> --add
-Microsoft.VisualStudio.Component.VC.Tools.ARM64`). rustc finds the ARM64
-linker by itself; nothing in `ponko_ffi` compiles C for Windows.
-
-```powershell
-rustup target add aarch64-pc-windows-msvc
-python scripts/c-library.py build --target x86_64-pc-windows-msvc
-python scripts/c-library.py build --target aarch64-pc-windows-msvc
-python scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-windows-x86_64.zip
-python scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-windows-arm64.zip
-```
-
-On an x64 machine the arm64 smoke builds the programs (`cmake -A ARM64`,
-the Visual Studio generator) without running them; on a Windows on Arm
-machine the same command runs them.
-
-No maintainer machine has the ARM64 tools, so the release builds
-`windows-arm64` on a GitHub-hosted Windows on Arm runner (`windows-11-arm`)
-instead: the job `windows-arm64` of the [release-time CI](#release-time-ci),
-run by pushing the branch `release-matrix/windows-arm64/X.Y.Z` from the tag.
-It runs the two commands above for `aarch64-pc-windows-msvc`, so the archive
-is smoke-tested by running the tests, and uploads it as the workflow artifact
-`ponko-c-library-windows-arm64`. Download it into `dist/` with
-`gh run download <run> -n ponko-c-library-windows-arm64 -D dist` (it is
-kept 7 days), delete the branch, and attach it with the other five.
-
-### Release-time CI
-
-There is no CI, and GitHub Actions stays off. At a release, hosted runners
-may do what the maintainers' machines can't: the Linux x86_64 checks
-(`ubuntu-24.04`), the Windows on Arm C library archive (`windows-11-arm`)
-and the Linux first run from crates.io. The workflow,
-`scripts/release-matrix.yml`, is generated from `scripts/checks.yml` by
-`scripts/release-matrix.py`. Nothing in it runs by default: the branch it is
-pushed on, `release-matrix/<markers>/<version>` (markers joined by `+`),
-marks each part to run.
-
-| Marker | What it tests | Estimate |
-|---|---|---|
-| `linux-tests` | the workspace tests (`checks.yml` `test`) | 35–45 min |
-| `linux-templates` | the `ponko new` templates (`templates`) | about 15 min |
-| `linux-features` | the feature sets (`test-features`) | 45–55 min |
-| `linux-native` | the C and C++ library and programs (`native`) | about 15 min |
-| `linux-package` | the packaged games (`package-smoke`) | about 20 min |
-| `linux-all` | all five, in one build | 80–100 min |
-| `windows-arm64` | the Windows on Arm C library archive and its smoke | 30–45 min |
-| `first-run` | `scripts/first-run.py` on Linux, after publishing | about 15 min |
-
-The rules ([scripts/release-0.2.md](scripts/release-0.2.md#release-time-ci)
-has the commands and the details):
-
-- Only the maintainer turns Actions on, for that one run, and off again
-  right after it. The workflow never goes to `main`.
-- Mark only what changed or what the release needs (`linux-all` once for
-  the first candidate of a minor; afterwards only the parts a fix touched).
-  Never `linux-all` to "just check".
-- One run per release candidate and marker set. No re-runs to see if a run
-  passes: reproduce a failure locally (the Linux steps in an `ubuntu:24.04`
-  container), fix it through a pull request, and let the next candidate's
-  run check it.
-
-### One-time setup (a maintainer, in settings)
-
-1. **crates.io ownership**: every maintainer who publishes is an owner of
-   each of the ten crates `ponko`, `ponko_aseprite`, `ponko_cli`,
-   `ponko_ecs`, `ponko_ffi`, `ponko_image_diff`, `ponko_lobby`,
-   `ponko_macros`, `ponko_mcp`, `ponko_unity` (and every crate added to the
-   release later; `cargo owner --add <user> <crate>`). A crate's first
-   publish makes only the publishing user its owner: add the others right
-   after it. Never store a registry token in the
-   repository or a file.
-2. **GitHub Pages for the web gallery**: repository Settings, Pages,
-   Source: "Deploy from a branch", branch `gh-pages`, folder `/` (the build
-   writes `.nojekyll`).
-
-### Release candidates
-
-From 0.2.0 on, STABILITY.md has every minor go out as `vX.Y.0-rc.1` at least a
-week before `vX.Y.0`. A candidate is released like any release (steps 1 to 5
-above, on `main`) with these differences:
-
-- **The version is `X.Y.0-rc.N`** in the root `Cargo.toml`, every published
-  `crates/*/Cargo.toml` and the sibling requirements between them. The tag is
-  `vX.Y.0-rc.N` with N counting from 1; `release-check.py` refuses any other
-  suffix (`-beta.1`, `-rc`, `-rc.0`) and a candidate of a patch release.
-- **Nobody gets it by accident.** crates.io and Cargo treat a version with a
-  suffix as a pre-release: `cargo add ponko` and `ponko = "0.2"` never select
-  it. A tester asks for it by writing it out: `cargo add ponko@0.2.0-rc.1`.
-  The GitHub release is created with `--prerelease` (and a pre-release is
-  never the "latest" one), and its notes start with a line saying so.
-- **The CHANGELOG section may still be `[Unreleased]`.** The notes come from
-  the first of `## [X.Y.0-rc.N]`, `## [X.Y.0]` and `## [Unreleased]` that
-  exists, so a candidate needs no rename: fold the fragments in
-  (`python3 scripts/changelog.py --version X.Y.0-rc.1`), keep the heading as it
-  is and tag. The fragments still have to be folded in first, as for a
-  release. The release itself, `vX.Y.0`, needs its own `## [X.Y.0]` section.
-- **The migration chapter is needed already.** A candidate whose notes list
-  `### Breaking changes` needs `book/src/migrating-to-X.Y.md`, listed in the
-  summary and holding every breaking entry, because the people who try a
-  candidate need it most. The fold writes it, and the next candidate's fold
-  adds its new entries to the same chapter (all candidates and the release of
-  a minor share the name).
-- **A regression is fixed on `main`** through a pull request, and the next
-  candidate, `rc.2`, follows. The release is the last candidate, unchanged but
-  for the version: set `version = "X.Y.0"` and the section name, run
-  `release-check.py check vX.Y.0`, and tag it.
-
-### Patch releases and backports
-
-`main` may hold breaking changes for the next minor as soon as a minor is
-released, so patch releases (0.1.1, 0.1.2, ...) come from a branch, `release-X.Y`
-(`release-0.1`), which holds only changes that keep the API (STABILITY.md,
-"Releases"). Maintainers protect `release-*` like `main`: pull requests only,
-no force pushes. The same checks apply to them: run the Semver check with
-`--base release-X.Y` on a pull request into a release branch (it fails any
-break there), and run the full list of checks before tagging a patch release.
-
-**Create the branch** from the tag of the minor's first release, once, after
-that release is out (a maintainer, once per minor; branch rules are set up for
-`release-*` already):
-
-```sh
-git fetch origin --tags
-git branch release-0.1 v0.1.0 && git push origin release-0.1
-```
-
-**Backport a fix.** A fix always lands on `main` first, through its normal
-pull request, with its `changelog.d/` fragment (a `### Fixed` or `### Added`
-entry; a `### Breaking changes` one can never be backported, and the Semver check
-will refuse it). To carry it over:
-
-1. Put the **`backport`** label on the merged pull request (or its issue)
-   saying "this belongs on the patch branch". `gh pr list --state merged
-   --label backport` lists what still waits.
-2. Cherry-pick the merge commit (one commit, since pull requests are squash
-   merged) onto a branch of the release branch. `-x` writes the original
-   commit's hash into the message:
-
-   ```sh
-   git fetch origin
-   git switch -c backport/<number>-<topic> origin/release-0.1
-   git cherry-pick -x <merge commit on main>
-   ```
-
-   The fragment comes along. On a conflict, resolve it keeping the fix and
-   nothing else, `git cherry-pick --continue`, and make sure the change still
-   compiles against the older code; `cargo test` the affected crates.
-3. Open the pull request **against `release-0.1`**, labelled `backport`, with
-   "Backport of #<number>" in its description. Run the checks it needs and the
-   Semver check (`--base release-0.1`) as for any pull request; merge it when
-   they pass.
-4. Take the `backport` label off the original pull request: it has been
-   carried over.
-
-**Release it** with steps 1 to 5 above, with these changes: work from a branch
-of `release-0.1` and open the release pull request against it (fold the
-fragments, set `version = "0.1.1"`, add the `## [0.1.1]` section, run
-`release-check.py check v0.1.1`); tag the merge commit on `release-0.1`; and,
-after the release, bring its notes to `main` through a pull request: copy the
-`## [0.1.1]` section and its link line into `CHANGELOG.md` there, and delete
-the fragments the release folded in from `main`'s `changelog.d/` (a
-cherry-picked fragment has the same file name on both branches), so the next
-minor does not list the fix a second time. Never merge `release-0.1` into
-`main`.
-
-`release-check.py check --on-branch` accepts `vX.Y.Z` on `main` as well as
-on the `release-X.Y` of its own minor: `v0.1.1` on `release-0.1` passes, on
-`release-0.2` or on an unmerged branch it does not.
-
-`python3 scripts/release-check.py published` fails if a version of our crates
-on crates.io has no matching tag, which is what a publish from the wrong
-commit looks like; run it after every release. To fix it, tag the commit the
-crate was published from. Its sha is in the `.crate` file:
-
-```sh
-curl -L https://static.crates.io/crates/ponko/ponko-X.Y.Z.crate | tar -xzOf - ponko-X.Y.Z/.cargo_vcs_info.json
-git tag vX.Y.Z <that sha> && git push origin vX.Y.Z
-```
-
-`0.0.1` was published by hand from the last commit of #167 before it was
-squash-merged; its tag `v0.0.1` is on the squash commit, whose tree differs
-only in repository URLs and docs wording.
-
-## License
+Everyone in the project follows the [code of conduct](CODE_OF_CONDUCT.md).
+How decisions are made, who can merge and how someone becomes a maintainer
+is in [GOVERNANCE.md](GOVERNANCE.md).
 
 By contributing, you agree that your contributions are dual licensed under
 [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE), like the rest of the

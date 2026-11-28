@@ -20,7 +20,7 @@ export function parseProjectUrl(text) {
  * Where GitHub Pages serves a repository's `gh-pages` branch:
  * `https://<owner>.github.io/<repository>/`. Only github.com has a known
  * Pages address; moving the project elsewhere means deciding the gallery's
- * host again (CONTRIBUTING.md, "Releasing").
+ * host again (RELEASING.md).
  */
 export function pagesUrl(projectUrl) {
   const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+)$/.exec(projectUrl);

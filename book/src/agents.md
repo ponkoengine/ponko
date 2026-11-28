@@ -575,7 +575,7 @@ python3 scripts/mcp-session.py stop $S           # writes the result file
 
 ### At a release
 
-CONTRIBUTING.md's "Releasing", step 3, asks for the suite at every release
+`RELEASING.md`, step 3, asks for the suite at every release
 and a real agent for a minor. The whole procedure, on the release branch:
 
 1. `cargo test -p ponko_mcp --test agent_suite` and

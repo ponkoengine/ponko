@@ -53,7 +53,7 @@ add it to MACOS_ONLY_ITEMS (or regenerate the files on Linux).
 Relation to scripts/semver-checks.py: the snapshot shows *every* change to the
 public API, growth included, so a reviewer decides whether the surface is meant.
 The semver job shows only what breaks code that compiled against the last
-release. CONTRIBUTING.md has a section on both.
+release. MAINTAINING.md has a section on both.
 """
 import difflib
 import importlib.util
@@ -213,7 +213,7 @@ def failure_message(changes):
         'changes or removes: check it is what you intended. If it is not, the change '
         'made something public by accident (`pub` instead of `pub(crate)`, a `pub use` '
         'that pulls in more than it should).',
-        'Tool and nightly are pinned in scripts/api-snapshots.py. CONTRIBUTING.md, '
+        'Tool and nightly are pinned in scripts/api-snapshots.py. MAINTAINING.md, '
         '"API snapshots", explains how this relates to the Semver checks job.',
     ]
 

@@ -1,7 +1,7 @@
 # Cutting 0.2: the exact commands
 
 The order of work for `v0.2.0-rc.1` and, at least a week later, `v0.2.0`
-(STABILITY.md, "Release candidates"). CONTRIBUTING.md, "Releasing", explains
+(STABILITY.md, "Release candidates"). RELEASING.md explains
 each step; this page is the list to follow, with the numbers filled in. Every
 command runs on a maintainer's machine from a clean checkout. Nothing here
 runs by itself: there is no CI.
@@ -60,7 +60,7 @@ candidate's `ponko new` would make projects that don't build); the `0.2.0`
 bump turns them into `"0.2"`. For `0.2.0` itself, rename the folded
 `## [Unreleased]` to `## [0.2.0] - YYYY-MM-DD`, put a new empty
 `## [Unreleased]` above it and fix the two links at the bottom
-(CONTRIBUTING.md, step 1). A candidate keeps `## [Unreleased]`.
+(RELEASING.md, step 1). A candidate keeps `## [Unreleased]`.
 
 Then the checks, on this branch:
 
@@ -84,7 +84,7 @@ The checks on the other machines: `run-checks.py` on the Windows PCs
 checks on a Linux machine, or in one run of the release-time CI with the
 markers of what changed since the last candidate (for `rc.1` of a minor,
 `linux-all`; see "Release-time CI" below). For `rc.1` also record the coverage numbers and
-the benchmark baseline (CONTRIBUTING.md, step 3) in the pull request. Open
+the benchmark baseline (RELEASING.md, step 3) in the pull request. Open
 the pull request and merge it.
 
 ## 2. Tag, build, publish
@@ -96,7 +96,7 @@ git switch --detach vV
 python3 scripts/release-check.py check vV --on-branch
 ```
 
-The six C library archives, each on its machine (CONTRIBUTING.md, "The C
+The six C library archives, each on its machine (RELEASING.md, "The C
 library archives"), gathered in `dist/`:
 
 ```sh
@@ -144,7 +144,7 @@ Linux: push the `release-matrix/first-run/V` branch of the release-time CI
 redeploy the website (its latest Cloudflare Pages deployment, retried) so
 https://ponko.dev/guide/ shows the release page and the migration chapter.
 For `0.2.0` (not a candidate) publish the web gallery to `gh-pages`
-(CONTRIBUTING.md, step 5.7). Delete `dist/`, `notes.md` and
+(RELEASING.md, step 5.7). Delete `dist/`, `notes.md` and
 `target/c-library`.
 
 ## 4. A week of rc.1, then 0.2.0

@@ -179,7 +179,7 @@ README from a local copy of the branch (`--write` saves it as `README.md`).
 **Release baselines on a named machine.** Instruction counts can't see
 everything, so every release also records a wall-clock baseline in
 `releases/<version>/<machine>/` here, from 5 runs on one idle machine (the
-maintainer's checklist in CONTRIBUTING.md, "Releasing", has the command),
+maintainer's checklist in RELEASING.md, step 3, has the command),
 and the release notes link it. Compare two releases with
 `bench_track compare releases/<old>/<machine> releases/<new>/<machine>`.
 0.1.0 predates the folder: its record is `baselines/ecs.json` as the `v0.1.0`

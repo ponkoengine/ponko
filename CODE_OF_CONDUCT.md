@@ -30,15 +30,21 @@ appearance, race, religion, or sexual identity and orientation.
 
 ## Scope
 
-This applies in every project space (issues, pull requests, discussions)
+This applies in every project space, online and in person (issues, pull
+requests, discussions, and any other place where the project's people meet),
 and when someone represents the project in public.
 
 ## Reporting
 
-Report unacceptable behavior to the maintainers privately through GitHub's
-[private vulnerability reporting](https://github.com/ponkoengine/ponko/security/advisories/new)
-form, marking it as a conduct report. Every report is reviewed promptly and
-handled confidentially.
+Report unacceptable behavior to the maintainers privately, in either of
+two ways:
+
+- by email to the maintainer, [leonmamic111@gmail.com](mailto:leonmamic111@gmail.com);
+- through GitHub's
+  [private vulnerability reporting](https://github.com/ponkoengine/ponko/security/advisories/new)
+  form, marked as a conduct report.
+
+Every report is reviewed promptly and handled confidentially.
 
 Maintainers may remove, edit or reject comments, commits, code, issues and
 other contributions that break this code of conduct, and may temporarily or

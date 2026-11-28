@@ -59,7 +59,7 @@
 `published` asks the crates.io API (one read request per crate) and compares
 with `git tag`; it needs no token.
 
-See "Releasing" in CONTRIBUTING.md for the whole procedure.
+See RELEASING.md for the whole procedure.
 """
 import json
 import re
@@ -520,7 +520,7 @@ def published():
     for name, version in missing:
         print(f"{name} {version} is on crates.io but v{version} is not a git tag")
     if missing:
-        print("Tag the commit it was published from (see \"Releasing\" in CONTRIBUTING.md).")
+        print("Tag the commit it was published from (see RELEASING.md).")
         return 1
     print("Every published version has a git tag.")
     return 0

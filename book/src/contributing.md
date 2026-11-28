@@ -2,20 +2,26 @@
 
 > **Maturity: not a feature.** How to contribute.
 
-Start with the quick start at the top of
-[`CONTRIBUTING.md`](../../CONTRIBUTING.md): clone, run
-`python3 scripts/run-checks.py --quick`, pick a `good first issue`, open a pull
-request. The detailed maintainer/agent integration checklist is in
-[`AGENTS.md`](../../AGENTS.md); how decisions are made and who can merge is in
-[`GOVERNANCE.md`](../../GOVERNANCE.md).
+Start with [`CONTRIBUTING.md`](../../CONTRIBUTING.md): your first change in
+four steps, which checks a change needs, how to claim an issue and how fast
+maintainers reply. This chapter is the reference behind it: the local checks,
+cargo features, unsafe code and sanitizers, GPU evidence and the other rules
+a change in one area needs. Read the part you need when you need it.
+API snapshots, semver checks and the dependency audit are in
+[`MAINTAINING.md`](../../MAINTAINING.md), the release procedure in
+[`RELEASING.md`](../../RELEASING.md), the maintainer and agent integration
+checklist in [`AGENTS.md`](../../AGENTS.md), and how decisions are made and
+who can merge in [`GOVERNANCE.md`](../../GOVERNANCE.md).
+
 In short:
 
-- Talk in [GitHub Discussions](https://github.com/ponkoengine/ponko/discussions)
-  (there is no chat room for now); maintainers answer new issues and
-  discussions within a week. Everyone is welcome, and no question or
-  contribution is too small.
+- Talk in [GitHub Discussions](https://github.com/ponkoengine/ponko/discussions).
+  A new issue or an outside pull request gets a first reply within three
+  days, and a pull request a review within a week
+  ([How fast we reply](../../CONTRIBUTING.md#how-fast-we-reply)). Everyone is welcome, and no
+  question or contribution is too small.
 - To take an issue, comment on it; a maintainer assigns it to you and nobody
-  else takes it ("Claiming an issue" in `CONTRIBUTING.md`).
+  else takes it ([Claiming an issue](../../CONTRIBUTING.md#claiming-an-issue)).
 - Work on a branch from `main` (there is no other integration branch), open a
   pull request to `main`, and run the checks your change needs locally (there
   is no CI).
@@ -26,20 +32,147 @@ In short:
   required from every contributor. Maintainers coordinate that coverage and
   own follow-ups. Preserve existing compatibility and describe behavior and tests.
 
+## Repository layout
+
+Cargo packages use `ponko` / `ponko_*`; the old native names are gone, and legacy runtime environment variable names remain supported. Code
+uses `include/ponko.h`, `include/ponko.hpp`, and `PONKO_*` settings. See
+[the naming migration](naming.md) for precedence and compatibility.
+
+| Path | What's there |
+|---|---|
+| `src/` | The engine (`ponko` crate) |
+| `crates/ponko_ecs` | The `ponko_ecs` ECS, usable on its own |
+| `crates/ponko_macros` | Derive macros (`#[derive(Component)]`), re-exported by `ponko_ecs` and `ponko` |
+| `crates/ponko_ffi` | The C API; `include/ponko.h` is generated from it |
+| `include/ponko.hpp` | The header-only C++ wrapper |
+| `crates/ponko_mcp` | The MCP server for AI agents |
+| `crates/ponko_bench` | Benchmarks (`cargo run --release -p ponko_bench [-- filter]`) |
+| `examples/`, `examples/cpp/` | Rust and C++ examples |
+| `tests/`, `crates/*/tests/` | Tests, one file per area |
+| `fuzz/` | Fuzz targets for the loaders of untrusted files and packets ([fuzz/README.md](../../fuzz/README.md)) |
+| `book/` | The guide ([mdBook](https://rust-lang.github.io/mdBook/)) |
+
 ## Running local checks
 
-`python3 scripts/run-checks.py --list` shows which inventory jobs can run on
-your machine. Use `--quick` for the quick subset or `--job NAME` for a particular
-job. See [Local checks](../../CONTRIBUTING.md#local-checks) for report files,
-provisioning and nightly scheduling.
+For a Rust change, format it and run the affected package or test, for example:
+
+```sh
+cargo fmt --all --check
+cargo test -p ponko_ecs --test queries  # an ECS query change
+cargo test -p ponko --test headless    # a headless simulation change
+```
+
+`cargo fmt --all` hands every target's file of the workspace to one `rustfmt`
+command; on Windows, in a checkout with a long path, that passes the
+command-line limit ("The filename or extension is too long (os error 206)").
+`python3 scripts/fmt-workspace.py --check` checks the same files in batches
+and works everywhere; the format check in `scripts/checks.yml` uses it.
+
+On a card with little memory the renderer's GPU tests can fail with `Not enough memory left`: add `-- --test-threads=4` (see [A card with little memory](render-tests.md#a-card-with-little-memory)).
+
+For guide changes, run `mdbook build book` if mdBook is available. You do not
+need a C++ toolchain for an unrelated Rust change. Report checks you could not
+run; maintainers cover the broader matrix before merging.
+
+### The list of checks
+
+Run the applicable checks from [scripts/checks.yml](../../scripts/checks.yml) with
+Python 3.10 or later, Git, and Bash. On Windows use Git for Windows and start
+from a Visual Studio Developer PowerShell with the C++ linker and SDK on
+`PATH`. Replace `python3` with `py -3` if needed. The runner uses the same
+Python interpreter for its steps. Install the required Rust toolchains and
+tools before the run.
+
+```sh
+python3 scripts/run-checks.py --list
+python3 scripts/run-checks.py --quick
+python3 scripts/run-checks.py --job test --job test-features
+python3 scripts/run-checks.py --tag lint
+python3 scripts/run-checks.py
+```
+
+`--job` and `--tag` can each be repeated. Combine them to select jobs that
+match both filters. `--list` prints the plan with prerequisites and skip
+reasons. The default runs the current OS lanes without opening windows.
+On a test machine with a display, add `--include-windowed` to include packaged
+game playback and other steps tagged `windowed`. Offscreen GPU tests can run
+in either mode.
+
+Setup actions (tool installers, system packages, caches and artifact uploads)
+are for machine provisioning. Use the versions and requirements in the
+inventory. On Linux install the ALSA and udev development headers before any
+native builds and AT-SPI plus D-Bus for the Linux accessibility lane. For the
+Linux browser job, install the pinned wasm-bindgen
+CLI, run `npm ci --prefix web/smoke`, and provision the Playwright browsers and
+OS dependencies listed in that job. The C++ browser check requires
+`WASI_SDK_PATH`. The WebKit audio checks expect a PulseAudio null sink on the
+test host.
+
+The runner prints each step's result and time and writes `results.json` and
+`summary.txt` to `target/check-results/` by default. Use `--out DIRECTORY` to
+save a report elsewhere. Reports include the checked revision, time, OS,
+Rust versions, skipped checks, and adapter and driver details when offscreen
+tests report them. The JSON also includes failed step output. Exit code 1
+means a check failed, and exit code 2 means a usage error or zero checks ran.
+The [integration instructions](../../AGENTS.md#integration-checks) describe when
+maintainers need additional checks.
+
+### Checks that need a person
+
+Some checks need a real machine, display or device. [scripts/checklists/](../../scripts/checklists/README.md)
+has a checklist and record sheet for each (hardware checks per OS, a
+newcomer test, input methods and screen readers, low-end hardware and the
+Steam Deck, the whole list on Linux), with scripts that make the runs quick.
+If you have the hardware, pick one and report on its issue.
+
+The nightly runs on maintainer machines are in
+[`MAINTAINING.md`](../../MAINTAINING.md#nightly-runs-on-maintainer-machines).
 
 ## Adding a cargo feature
 
-Every feature needs a clippy line, a test line and, when docs.rs builds the
-crate with it, a doc line in `scripts/checks.yml` (the list of checks, which
-maintainers run locally).
-`python3 scripts/check-feature-coverage.py` fails for one without; see
-`CONTRIBUTING.md`, "Adding or changing a cargo feature".
+The list of checks is [scripts/checks.yml](../../scripts/checks.yml): a change
+breaks nothing unseen only if some line there builds it. Every cargo feature of
+every crate in the workspace needs, in checks.yml,
+
+- a **clippy** line that turns it on (a `matrix.include` entry of the `clippy`
+  job: its `scope` is the package, `args` the features),
+- a **test** line that turns it on (a step of the `test-features` job, meant
+  for Linux, macOS and Windows),
+- and, if docs.rs builds the crate with it (`[package.metadata.docs.rs]`), a
+  **doc** line (the "Docs with every public feature" step of the `docs` job).
+
+`python3 scripts/check-feature-coverage.py` reads Cargo.toml and checks.yml and
+fails for a feature without one; `--list` shows each feature's checks. A feature
+counts as on in a line when the line names it, when a feature that is on lists
+it (`image-formats` turns on `image-bmp`), when it is a default feature, or when
+a crate built together with it asks for it (cargo unifies features: building the
+workspace builds `ponko` with whatever `ponko_lobby` and `ponko_ffi` ask of it).
+The checks that go with a feature are in the same file:
+
+| What | Where in checks.yml |
+|---|---|
+| `editor`, `video`, `lobby`, `webrtc` and the others, linted and tested | `clippy` matrix; `test-features` steps "Tests, editor", "Tests, video", "Tests, lobby client and WebRTC endpoints" |
+| The C and C++ test programs against a library with `webrtc` | `native`: `--features control-env,webrtc` with `-DPONKO_WEBRTC=ON` |
+| The ECS hooks and required components under Miri (Tree Borrows) | `miri`, "par_for_each, tree borrows" |
+| The engine's unsafe code under Miri (the `miri` tests of `scripts/unsafe-inventory.txt`) | `miri`, "engine unsafe code, tree borrows" |
+| The C and C++ test programs and the `ponko_ffi` tests under AddressSanitizer and UndefinedBehaviorSanitizer | `sanitizers` |
+| The threaded web build (with `-D warnings`, and its self-test `--case warning`), its fallback without the isolation headers, and its controllers (`--case gamepads`) | `web-smoke`: `web/smoke/threads.mjs` |
+| Browser multiplayer and replication | `web-smoke`: `web/smoke/multiplayer.mjs`, `web/smoke/replication.mjs` |
+
+Only if a feature has nothing a cargo test can check, put it in
+`scripts/feature-checks.txt` with a reason that names what checks it instead.
+The script also fails for an entry that is not needed any more, so the list
+only shrinks. The same file lists the browser runners (`web/smoke`,
+`web/gallery`) that checks.yml doesn't run; a new runner without a step in
+checks.yml fails the check.
+
+Run it, with the selftest of its parsing, before a change to Cargo.toml's
+features or to checks.yml:
+
+```sh
+python3 scripts/check-feature-coverage.py
+python3 scripts/check-feature-coverage.py --selftest
+```
 
 ## Changing the renderer
 
@@ -48,6 +181,36 @@ failure means on other hardware are described in
 [GPU regression tests](render-tests.md). Run them on your GPU and under
 `PONKO_GPU_TIER=baseline` and `webgl2` before a pull request, and say in it
 which adapter they ran on and what was skipped.
+
+## Reproductions and GPU evidence
+
+A useful bug report includes a minimal runnable example or failing test, commands,
+engine revision, Rust version, feature flags, expected and actual results, and logs.
+For nondeterministic failures, include the seed or input sequence when available.
+For rendering, add OS, GPU/driver/backend, resolution and quality settings, plus
+screenshots when safe to share. Never attach private project assets or secrets.
+
+For GPU changes, run relevant offscreen/visual tests and inspect comparable
+before/after images. Exercise capability fallbacks and resize/history behavior
+when affected. Record skipped tests and unsupported adapters; a headless logic
+test does not establish rendering correctness. If hardware is unavailable, say
+which validation is missing in the PR so reviewers can help.
+
+The offscreen GPU suites live in `src/render/*_render_test.rs`. Their shared
+conventions (getting the adapter with a logged skip reason, tolerance-based image
+comparison and semantic pixel checks, reference images with metadata under
+`tests/fixtures/render/`) are documented in `src/render/render_test_support.rs`.
+Run them with `cargo test -p ponko --lib --features 3d render_test -- --nocapture`
+and report which ran and which logged `render test SKIPPED`. Reference images are
+only rewritten with `PONKO_UPDATE_REFERENCES=1` (refused when the `CI`
+environment variable is set); a regenerated
+reference needs the before/after images in the PR.
+
+Performance PRs should record the revision, commands, toolchain, features, hardware,
+workload, warm-up and comparable before/after results. Include CPU and GPU times,
+frame-time percentiles, memory and allocations where relevant, and identify metrics
+that could not be collected. Verify correctness independently; never generalize
+one benchmark into an overall engine ranking.
 
 ## Testing the C API
 
@@ -102,7 +265,7 @@ with `ios` for why it can't run under Miri.
 The C API is one long unsafe boundary, so its tests also run under
 AddressSanitizer and UndefinedBehaviorSanitizer: the C and C++ test programs
 (`-DPONKO_SANITIZE=ON` in `examples/cpp`) and the `ponko_ffi` tests. The
-commands are in `CONTRIBUTING.md`, "Unsafe code and sanitizers".
+commands are in [Running the unsafe-code checks](#running-the-unsafe-code-checks).
 
 Every C function also says who owns each pointer it takes or returns. The
 rules at the top of `include/ponko.h` cover most of them by type: a `Ponko*`
@@ -120,6 +283,49 @@ comment, such as:
 `python3 scripts/check-ffi-ownership.py` fails for a function that leaves one
 unsaid, and says what to write.
 
+### Running the unsafe-code checks
+
+```sh
+python3 scripts/check-unsafe.py            # every unsafe item has a test
+python3 scripts/check-unsafe.py --list     # each item and its test
+python3 scripts/check-ffi-ownership.py     # every C pointer's owner is said
+```
+
+`check-unsafe.py` fails for unsafe code without a line, and prints the line to
+add; write the test first. If you touched unsafe code outside the ECS (the
+ECS has its own Miri commands, in AGENTS.md), run its
+Miri tests, one command per test target (`--miri` prints them from the list):
+
+```sh
+python3 scripts/check-unsafe.py --miri | while read -r line; do
+  MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" bash -c "$line" || break
+done
+rm -rf target/miri
+```
+
+If you touched `crates/ponko_ffi`, `include/` or `examples/cpp`, run the C
+API under AddressSanitizer and UndefinedBehaviorSanitizer (checked on macOS
+on Apple silicon; on Linux use the `x86_64-unknown-linux-gnu` target). The
+C and C++ test programs, built with both sanitizers against a debug library:
+
+```sh
+cargo build -p ponko_ffi --features control-env,webrtc
+cmake -S examples/cpp -B target/native-asan -DCMAKE_BUILD_TYPE=Debug \
+  -DPONKO_SANITIZE=ON -DPONKO_WEBRTC=ON -DPONKO_LIBRARY_DIR="$PWD/target/debug"
+cmake --build target/native-asan
+ASAN_OPTIONS=detect_container_overflow=0 UBSAN_OPTIONS=print_stacktrace=1 \
+  ctest --test-dir target/native-asan --output-on-failure
+```
+
+and the `ponko_ffi` tests, the Rust side built with AddressSanitizer (Rust
+has no separate UB sanitizer; its UB checks are Miri's):
+
+```sh
+RUSTFLAGS="-Zsanitizer=address" RUSTDOCFLAGS="-Zsanitizer=address" \
+  cargo +nightly test -p ponko_ffi --target aarch64-apple-darwin --tests
+rm -rf target/native-asan target/aarch64-apple-darwin
+```
+
 ## The C++ wrapper
 
 `include/ponko.hpp` wraps every C function, or the function is on the short
@@ -132,6 +338,64 @@ in this book that isn't an `\{{#include}}` of a compiled file. Put a guide's
 C++ example in `examples/cpp/guide.cpp` (C in `guide.c`) between
 `// ANCHOR: name` and `// ANCHOR_END: name` lines and include it by its anchor;
 the native check compiles and runs both.
+
+## Performance changes
+
+Claims need numbers: measure in release builds before and after, and put
+both in the pull request. Avoid per-frame heap allocations on hot paths.
+
+The `ponko_bench` README, "Tracking results over time", describes the
+tracked workloads: the instruction counts of a few small workloads (ECS
+iteration, queries, spawn/despawn, a sim tick, 3D frame collection), which a
+pull request that touches the engine, the ECS or the benchmarks compares with
+its base. Nothing measures them for you: run them locally and put the
+comparison in the pull request. A slower benchmark doesn't block the merge,
+but explain it in the pull request, or fix it. To compare, run
+`bench_track compare` on repeated runs of each side (a single run has no spread, so its threshold
+is only the floor); instruction counts need valgrind, so on macOS compare
+wall-clock runs of `ponko_bench`.
+
+## Breaking changes
+
+A change that breaks code written against the last release carries its
+migration note in its own pull request: a changelog fragment with a
+`### Breaking changes` entry and the `breaking` label.
+[`MAINTAINING.md`](../../MAINTAINING.md#breaking-changes-the-migration-note)
+has the rules, and how the API snapshots and the semver check find a break.
+
+## Architecture proposals
+
+Read [PROJECT_VISION.md](../../PROJECT_VISION.md), [ARCHITECTURE.md](../../ARCHITECTURE.md),
+[ROADMAP.md](../../ROADMAP.md) and [STABILITY.md](../../STABILITY.md) for the affected work.
+Discuss major changes in an issue before implementing them. Describe the problem,
+a small proposed interface, ownership and dependency boundaries, alternatives,
+compatibility/platform effects and validation plan. Explain why a new abstraction,
+crate or dependency is better than a smaller internal change.
+
+The aim is modular internals with an integrated public experience. Keep ordinary
+`Game`/`Ctx` workflows usable, preserve optional features and headless operation,
+and avoid unrelated rewrites. The proposed parallel system scheduler remains
+optional; it needs sound access boundaries and explicit ordering/determinism rules,
+never concurrent unrestricted mutable access to `Ctx` or `World`.
+
+## Fuzzing
+
+The loaders that read data a game doesn't control (scenes, prefabs, glTF,
+the Unity importer's readers, action maps, asset packs, network packets)
+have fuzz targets in [`fuzz/`](../../fuzz/README.md). When you change one of
+those loaders, run its target for a few minutes (nightly Rust and
+cargo-fuzz):
+
+```sh
+fuzz/seed-corpus.sh
+fuzz/run-all.sh 300 scene   # five minutes of the scene target
+```
+
+A crash, hang or huge allocation it finds is a bug in the loader: fix it
+there and add a regression test next to the loader's tests. Maintainers run
+every target from time to time on `main` (`fuzz/run-all.sh` with no
+arguments uses the seconds in `fuzz/targets.txt`) and open an issue,
+"Fuzzing: `<target>` (`<kind>`)", for what it finds.
 
 ## Editing this book
 

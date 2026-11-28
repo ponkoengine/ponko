@@ -5,7 +5,7 @@
                          [--window] [--dry-run]
     first-run.py selftest
 
-Run it on each OS after `cargo publish` (CONTRIBUTING.md, "Releasing"), from
+Run it on each OS after `cargo publish` (RELEASING.md, step 5.5), from
 any folder outside the checkout: nothing here reads the repository, so it sees
 what a user sees. It does what getting-started.md tells a new user to do:
 

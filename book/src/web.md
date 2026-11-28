@@ -84,8 +84,8 @@ python3 -m http.server -d target/web/gallery 8000
 A demo marked `"webgpu": "required"` there needs WebGPU; on a browser without
 it, its page says so and what to try instead of starting it. The others run
 with WebGPU or, where the browser lacks it, WebGL2. The release steps build
-the gallery for the release's version to publish it (CONTRIBUTING.md,
-"Releasing"); no hosted gallery is online yet, so build it locally as above.
+the gallery for the release's version to publish it (`RELEASING.md`,
+step 5.7); no hosted gallery is online yet, so build it locally as above.
 Adding an example is one line in
 `examples.json`; the gallery's
 [README](../../web/gallery/README.md)

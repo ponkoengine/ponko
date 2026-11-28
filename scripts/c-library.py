@@ -51,8 +51,8 @@ runs arm64 Linux natively on Apple silicon): the image, Rocky Linux 8 by
 default, has glibc 2.28, the oldest the archives support, so the test also
 proves that floor. It needs the network (to install CMake and a compiler).
 
-Exit codes: 0 done, 1 a step failed, 3 bad arguments. CONTRIBUTING.md
-"Releasing" has the procedure, per machine.
+Exit codes: 0 done, 1 a step failed, 3 bad arguments. RELEASING.md,
+"The C library archives", has the procedure, per machine.
 """
 
 import argparse

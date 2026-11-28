@@ -27,9 +27,12 @@ published crates and the domain.
   scope is defined by its issues and milestone; a date is a target.
 - **Talk happens in the open.** [GitHub Discussions](https://github.com/ponkoengine/ponko/discussions)
   is the place for questions, ideas and showing what you made; there is no
-  separate chat room for now. Maintainers answer new issues and discussions
-  within a week. An idea that gets agreement in a discussion becomes an issue,
-  and the issue is the decision record.
+  separate chat room for now. A new issue or a pull request from outside gets
+  a first reply within three days, a pull request a review within a week,
+  and a new discussion an answer within a week
+  ([How fast we reply](CONTRIBUTING.md#how-fast-we-reply)). An idea that
+  gets agreement in a discussion becomes an issue, and the issue is the
+  decision record.
 - **Disagreeing with a decision**: say so on the issue, with evidence (a
   measurement, a reproduction, a use case). Evidence changes decisions; volume
   does not. The [code of conduct](CODE_OF_CONDUCT.md) applies everywhere.
@@ -39,8 +42,9 @@ published crates and the domain.
 Only maintainers merge, through a pull request into `main`; nobody pushes to
 `main` directly, and history stays linear ([AGENTS.md](AGENTS.md#git-workflow-required)).
 A maintainer does not merge a change they could not explain and test. There is
-no CI, so the checks listed in [CONTRIBUTING.md](CONTRIBUTING.md#local-checks)
-are run locally before merging and the pull request says which ran.
+no CI, so the checks a change needs
+([CONTRIBUTING.md](CONTRIBUTING.md#which-checks-your-change-needs)) are run
+locally before merging and the pull request says which ran.
 
 Contributions made with the help of coding agents are reviewed like any other.
 The author, a person, answers for the change and for what the agent did on their
@@ -57,7 +61,7 @@ behalf ([Using coding agents](CONTRIBUTING.md#using-coding-agents)).
    owners record the result.
 3. The organization owners add them to the repository with write access. A
    maintainer who will publish releases also becomes an owner of the crates on
-   crates.io ([One-time setup](CONTRIBUTING.md#one-time-setup-a-maintainer-in-settings)).
+   crates.io ([One-time setup](RELEASING.md#one-time-setup-a-maintainer-in-settings)).
 4. A maintainer who is away for a long time may be set back to contributor, and
    come back the same way they came in: by asking.
 
@@ -71,7 +75,7 @@ The project must not stop because one person is away for a month. The honest
 state, and what is planned:
 
 - **Release steps are written down.** Everything needed to cut a release from a
-  clean checkout is in [CONTRIBUTING.md, "Releasing"](CONTRIBUTING.md#releasing):
+  clean checkout is in [RELEASING.md](RELEASING.md):
   the order of the steps, the commands and what to check. A second
   person doing one release from those steps alone, without asking, is the
   test that they are complete.

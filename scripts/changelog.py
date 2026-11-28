@@ -15,7 +15,7 @@
     python3 scripts/changelog.py --breaking FILE...
                                            # which of the fragments announce a
                                            # breaking change (semver-checks.py
-                                           # asks this, see CONTRIBUTING.md)
+                                           # asks this, see MAINTAINING.md)
     python3 scripts/changelog.py --selftest
                                            # check the rules with made-up input
 

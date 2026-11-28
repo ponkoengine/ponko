@@ -5,7 +5,7 @@
     release-matrix.py check    # fail if it is out of date with checks.yml
     release-matrix.py selftest
 
-The project has no CI (CONTRIBUTING.md, "Releasing"). The maintainers' own
+The project has no CI (RELEASING.md). The maintainers' own
 machines cover macOS, Windows x64 and the arm64 Linux C library. At a release,
 hosted runners may do what those machines cannot, and only what the branch
 name marks:
@@ -240,7 +240,7 @@ LINUX_SKIPS = """\
 C_LIBRARY = """\
   # From the tag: the C library archive for Windows on Arm, built and
   # smoke-tested (the C and C++ tests run) on a hosted Windows on Arm runner
-  # (scripts/c-library.py; CONTRIBUTING.md, "The C library archives"). The
+  # (scripts/c-library.py; RELEASING.md, "The C library archives"). The
   # version is the branch name's last part. The maintainer downloads the
   # artifact into dist/ with the other five.
   windows-arm64:

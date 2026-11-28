@@ -166,7 +166,8 @@ compiling in its patch releases. So do what a plugin adds through:
 - **Patch releases come from a release branch** (`release-0.2`, ...), so
   `main` can take breaking changes for the next minor right after a
   release. Fixes land on `main` first and are carried over (the `backport`
-  label marks them; CONTRIBUTING.md, "Releasing", has the procedure).
+  label marks them; RELEASING.md, "Patch releases and backports", has the
+  procedure).
 - **Deprecation.** Where it is cheap, a replaced item stays as
   `#[deprecated]`, naming its replacement, until the next minor removes it.
   Where it is not, it goes at once, with its migration entry.

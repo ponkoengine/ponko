@@ -492,7 +492,7 @@ jobs:
 
   # From the tag: the C library archive for Windows on Arm, built and
   # smoke-tested (the C and C++ tests run) on a hosted Windows on Arm runner
-  # (scripts/c-library.py; CONTRIBUTING.md, "The C library archives"). The
+  # (scripts/c-library.py; RELEASING.md, "The C library archives"). The
   # version is the branch name's last part. The maintainer downloads the
   # artifact into dist/ with the other five.
   windows-arm64:
